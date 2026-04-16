@@ -1,0 +1,16 @@
+{
+  "enabled": true,
+  "hour": 0,
+  "minute": 0,
+  "ecosystems": [
+    "npm",
+    "PyPI",
+    "Go",
+    "Maven",
+    "RubyGems",
+    "NuGet"
+  ],
+  "limit": 10000,
+  "timeout_minutes": 120,
+  "last_run_at": null
+}
