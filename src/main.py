@@ -2,6 +2,7 @@
 Shielva MCP Server - Main Application
 The AI Operating System for Shielva ARC
 """
+from fastapi.responses import Response
 from fastapi import FastAPI, Request, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -658,6 +659,19 @@ def main():
         reload=settings.debug
     )
 
+
+
+
+@app.get("/metrics", include_in_schema=False)
+async def prometheus_metrics():
+    """Expose Prometheus metrics for scraping."""
+    try:
+        from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
+        from fastapi.responses import Response
+        return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
+    except ImportError:
+        from fastapi.responses import Response
+        return Response(status_code=404, content=b"prometheus_client not installed")
 
 if __name__ == "__main__":
     main()

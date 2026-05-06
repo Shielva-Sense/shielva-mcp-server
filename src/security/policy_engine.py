@@ -82,6 +82,8 @@ class OPAPolicyEngine:
         role_map = {
             "demo_user": "Demo User",
             "tenant_admin": "Tenant Admin",
+            "customer_admin": "Tenant Admin",
+            "admin": "Tenant Admin",
             "bot_manager": "Bot Manager",
             "analyst": "Analyst",
             "viewer": "Viewer",
@@ -159,6 +161,8 @@ class OPAPolicyEngine:
         role_map = {
             "demo_user": "Demo User",
             "tenant_admin": "Tenant Admin",
+            "customer_admin": "Tenant Admin",
+            "admin": "Tenant Admin",
             "bot_manager": "Bot Manager",
             "analyst": "Analyst",
             "viewer": "Viewer",
@@ -245,6 +249,8 @@ class OPAPolicyEngine:
         role_map = {
             "demo_user": "Demo User",
             "tenant_admin": "Tenant Admin",
+            "customer_admin": "Tenant Admin",
+            "admin": "Tenant Admin",
             "bot_manager": "Bot Manager",
             "analyst": "Analyst",
             "viewer": "Viewer",
