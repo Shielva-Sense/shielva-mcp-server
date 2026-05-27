@@ -48,9 +48,9 @@ class MCPSettings(BaseSettings):
     gemini_api_key: Optional[str] = Field(None, validation_alias="GEMINI_API_KEY")
     
     # LiteLLM Config
-    litellm_model: str = "gemini/gemini-2.0-flash"
-    litellm_fallback_models: List[str] = ["gemini/gemini-2.5-flash", "gemini/gemini-2.0-flash-lite"]
-    max_tokens: int = 4096
+    litellm_model: str = "gemini/gemini-2.5-flash-lite"
+    litellm_fallback_models: List[str] = ["gemini/gemini-2.5-flash", "gemini/gemini-2.5-pro"]
+    max_tokens: int = 65536
     temperature: float = 0.1
     
     # Embedding
@@ -68,7 +68,7 @@ class MCPSettings(BaseSettings):
     kb_routing_top_kbs: int = 2
     
     # Connector Gateway
-    connector_gateway_url: str = "http://localhost:8003"
+    connector_gateway_url: str = "https://localhost:8003"
     connector_timeout_seconds: int = 30
     
     # Security

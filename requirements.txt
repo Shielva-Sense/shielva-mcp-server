@@ -1,3 +1,9 @@
+# shielva-common provides the `shared` Python package (DiscoveryClient,
+# correlation) plus shielva_common helpers. Pulled from a GitHub Release
+# of Shielva-AI/shielva-platform-core. Authentication via ~/.netrc
+# (or BuildKit secret in Docker — see service Dockerfile).
+shielva-common @ git+https://github.com/Shielva-AI/shielva-platform-core@shielva-common-v0.2.0#subdirectory=shielva-common
+
 # Core
 fastapi>=0.109.0
 uvicorn>=0.27.0
@@ -43,3 +49,4 @@ orjson>=3.9.0
 # Development
 pytest>=7.4.0
 pytest-asyncio>=0.23.0
+prometheus_client>=0.20.0
