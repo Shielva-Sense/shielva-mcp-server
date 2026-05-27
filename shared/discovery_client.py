@@ -1,1 +1,0 @@
-/Volumes/V3-SSD/Shielva Project Dirs/shielva-platform-core/shared/discovery_client.py
