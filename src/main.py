@@ -2,12 +2,22 @@
 Shielva MCP Server - Main Application
 The AI Operating System for Shielva ARC
 """
+# ── Envelope decryption (must run BEFORE any settings/env-reading imports) ──
+import os as _envelope_os
+_envelope_os.environ.setdefault("VAULT_SIDECAR_URL", "https://localhost:8054")
+from dotenv import load_dotenv as _envelope_load_dotenv
+_envelope_load_dotenv(".env", override=True)   # ciphertext + REDIS_URL passthrough
+from shielva_common.envelope import bootstrap as _envelope_bootstrap
+_envelope_bootstrap()
+# ──────────────────────────────────────────────────────────────────────────
+
 from fastapi.responses import Response
 from fastapi import FastAPI, Request, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from contextlib import asynccontextmanager
-from typing import Dict, Any
+from typing import Dict, Any, List
+from pydantic import BaseModel, Field
 import structlog
 import uvicorn
 import json
@@ -149,6 +159,13 @@ async def lifespan(app: FastAPI):
         dimension=settings.embedding_dimensions
     )
     embedding_client = EmbeddingClient(config=embedder_config)
+    # Expose on app.state so HTTP routes (POST /mcp/v1/embeddings) can use it.
+    # Previously this was scoped to lifespan() only; the route shielva-presence
+    # has been calling (TrailFollower.prepare() → POST /mcp/v1/embeddings) was
+    # never implemented because nothing exposed the client. TrailFollower
+    # silently received [] back. Wiring the client to app.state lets the new
+    # route below pull it via request.app.state.embedding_client.
+    app.state.embedding_client = embedding_client
 
     rag_client = HybridRetriever(
         vector_store=vector_store,
@@ -163,6 +180,10 @@ async def lifespan(app: FastAPI):
     # Register codegen intelligence tools (used by fix-agent endpoint)
     from src.tools.codegen_tools import register_codegen_tools
     register_codegen_tools(tool_registry)
+
+    # Register meeting TMS tools (used by post-meeting transcript extraction)
+    from src.tools.meeting_tools import register_meeting_tools
+    register_meeting_tools(tool_registry)
 
     # Inject dependencies into tool_registry
     tool_registry.set_rag_client(rag_client)
@@ -213,16 +234,25 @@ async def lifespan(app: FastAPI):
     # Discovery Registration
     import asyncio
     from shared.discovery_client import DiscoveryClient
-    gateway_url = os.getenv("GATEWAY_URL", "http://localhost:8000")
+    gateway_url = os.getenv("GATEWAY_URL", "https://localhost:8000")
     api_port = int(os.getenv("MCP_PORT", 8004))
-    
+
+    # Match registration scheme to the actual listen scheme — if CERT_FILE+KEY_FILE
+    # are set the server serves HTTPS, so registering as plain http would point
+    # callers at a non-existent listener. Same logic CMS + tms-core already use.
+    cert_file = os.getenv("CERT_FILE")
+    key_file = os.getenv("KEY_FILE")
+    use_ssl = cert_file and key_file and os.path.exists(cert_file) and os.path.exists(key_file)
+    scheme = "https" if use_ssl else "http"
+
     app.state.discovery = DiscoveryClient(
         service_name="mcp",
         service_port=api_port,
-        gateway_url=gateway_url
+        gateway_url=gateway_url,
+        scheme=scheme,
     )
     asyncio.create_task(app.state.discovery.start())
-    logger.info("MCP Server registered with Discovery", gateway=gateway_url)
+    logger.info("MCP Server registered with Discovery", gateway=gateway_url, scheme=scheme)
 
     # Message handler orchestrates everything
     message_handler = MessageHandler(
@@ -232,7 +262,32 @@ async def lifespan(app: FastAPI):
         llm_router=llm_router,
         policy_engine=policy_engine
     )
-    
+
+    # Surface legacy registries on app.state — still consumed by
+    # codegen fix-agent + JSON-RPC dispatcher's resources/* fallback
+    # paths until the slice 4c migration lands.
+    app.state.kb_registry      = kb_registry
+    app.state.bot_registry     = bot_registry
+    app.state.message_handler  = message_handler
+
+    # All new-layer ports + application services are wired in one
+    # place: composition.wire_use_cases. main.py owns the legacy
+    # infra construction; composition owns the DDD/hexagonal graph
+    # we build on top.
+    from src.composition import wire_use_cases
+    wire_use_cases(
+        app,
+        tool_registry    = tool_registry,
+        kb_registry      = kb_registry,
+        bot_registry     = bot_registry,
+        policy_engine    = policy_engine,
+        message_handler  = message_handler,
+        llm_router       = llm_router,
+        embedding_client = embedding_client,
+        vector_store     = vector_store,
+        rag_client       = rag_client,
+    )
+
     logger.info("MCP Server initialized successfully")
 
     # Start RAG ingestion scheduler (daily auto-reindex)
@@ -284,13 +339,50 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# Internal codegen routes (used by integration-builder when LLM_MODE=mcp)
-from src.api.codegen_routes import codegen_router  # noqa: E402
-app.include_router(codegen_router)
+# SOP observability: traces + /sop-metrics + optional self-registration.
+# Must run before other middleware so the metrics middleware sees the
+# pre-auth view of every request.
+from shielva_common.sop_sdk import setup_sop  # noqa: E402
+setup_sop(app, service_name="shielva-mcp")
 
-# RAG ingestion management (start/cancel/status/stats/schedule for security-fix-collector)
-from src.api.ingest_routes import router as ingest_router, start_scheduler, stop_scheduler  # noqa: E402
+# All REST routes are owned by interface/http/. URL paths are
+# unchanged so integration-builder + ingestion-worker + presence
+# clients keep working without config updates. main.py only knows
+# the package; each module owns one logical surface.
+from src.interface.http import (  # noqa: E402
+    admin_router,
+    codegen_router,
+    connectors_router,
+    embeddings_router,
+    health_router,
+    ingest_router,
+    llm_router,
+    provision_router,
+    query_router,
+    tools_router,
+    start_scheduler,
+    stop_scheduler,
+)
+app.include_router(health_router)
+app.include_router(codegen_router)
 app.include_router(ingest_router)
+app.include_router(query_router)
+app.include_router(embeddings_router)
+app.include_router(provision_router)
+app.include_router(tools_router)
+app.include_router(connectors_router)
+app.include_router(admin_router)
+app.include_router(llm_router)
+
+# Industry-grade Model Context Protocol (spec 2024-11-05, Streamable
+# HTTP 2025-03-26). Routes POST/DELETE /mcp through a JSON-RPC 2.0
+# façade wired via the DDD/hexagonal composition root. Slice 1 wires
+# the chat bounded context end-to-end; tools/resources/prompts still
+# bridge to the legacy registries until later slices land. The
+# internal REST API (/mcp/v1/...) keeps its existing shape — every
+# other consumer is unaffected.
+from src.composition import build_mcp_jsonrpc_router  # noqa: E402
+app.include_router(build_mcp_jsonrpc_router())
 
 # CORS middleware
 app.add_middleware(
@@ -302,376 +394,15 @@ app.add_middleware(
 )
 
 
-# ===== Dependencies =====
-
-async def get_tenant_context_async(request: Request) -> TenantContext:
-    """Extract tenant context from request headers and fetch permissions from MongoDB."""
-    tenant_id = request.headers.get("X-Tenant-ID")
-    user_id = request.headers.get("X-User-ID")
-    user_email = request.headers.get("X-User-Email")
-    role = request.headers.get("X-User-Role", "Customer_Basic")
-    
-    if not tenant_id:
-        raise HTTPException(
-            status_code=401,
-            detail="Missing X-Tenant-ID header"
-        )
-    
-    # Fetch custom permissions from MongoDB
-    permissions = []
-    if user_email:
-        try:
-            from motor.motor_asyncio import AsyncIOMotorClient
-            mongodb_url = os.getenv("MONGODB_URL", "mongodb+srv://shielvaadmin:shielvaadmin123@mastershielva.8rbs44q.mongodb.net/?appName=MasterShielva")
-            try:
-                import certifi as _c2; _tls2 = {"tlsCAFile": _c2.where()} if mongodb_url.startswith("mongodb+srv") else {}
-            except ImportError:
-                _tls2 = {}
-            client = AsyncIOMotorClient(mongodb_url, **_tls2)
-            db = client["CustomerProfile"]
-            collection = db["llm_user_configuration"]
-            
-            user_config = await collection.find_one({"user_email": user_email})
-            if user_config and "access_permissions" in user_config:
-                permissions = user_config["access_permissions"]
-                logger.info(
-                    "Loaded custom permissions from MongoDB",
-                    user_email=user_email,
-                    permissions=permissions
-                )
-            
-            client.close()
-        except Exception as e:
-            logger.warning(
-                "Failed to fetch custom permissions from MongoDB",
-                user_email=user_email,
-                error=str(e)
-            )
-    
-    return TenantContext(
-        tenant_id=tenant_id,
-        user_id=user_id or "unknown",
-        user_email=user_email or "unknown@example.com",
-        role=role,
-        permissions=permissions
-    )
-
-def get_tenant_context(request: Request) -> TenantContext:
-    """Synchronous wrapper for get_tenant_context_async (for backwards compatibility)."""
-    import asyncio
-    try:
-        loop = asyncio.get_event_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-    
-    return loop.run_until_complete(get_tenant_context_async(request))
-
-
-
-# ===== Health Endpoints =====
-
-@app.get("/health")
-async def health_check():
-    """Health check endpoint."""
-    return {
-        "status": "healthy",
-        "service": "mcp-server",
-        "version": settings.app_version
-    }
-
-
-@app.get("/ready")
-async def readiness_check():
-    """Readiness check with component status."""
-    return {
-        "status": "ready",
-        "components": {
-            "tool_registry": tool_registry is not None,
-            "llm_router": llm_router is not None,
-            "context_assembler": context_assembler is not None,
-            "message_handler": message_handler is not None
-        }
-    }
-
-
-# ===== Query Endpoints =====
-
-@app.post(f"{settings.api_prefix}/query", response_model=MCPQueryResponse)
-async def process_query(
-    request: MCPQueryRequest,
-    tenant_context: TenantContext = Depends(get_tenant_context)
-):
-    """
-    Process a query through the MCP pipeline.
-    
-    This is the main entry point for AI queries.
-    """
-    logger.info(
-        "Query request received",
-        tenant_id=tenant_context.tenant_id,
-        bot_id=request.bot_id
-    )
-    
-    try:
-        response = await message_handler.handle_query(
-            request=request,
-            tenant_context=tenant_context
-        )
-        return response
-    except PermissionError as e:
-        raise HTTPException(status_code=403, detail=str(e))
-    except Exception as e:
-        logger.error("Query processing failed", error=str(e))
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post(f"{settings.api_prefix}/query/stream")
-async def process_query_stream(
-    request: MCPQueryRequest,
-    tenant_context: TenantContext = Depends(get_tenant_context)
-):
-    """Process query with streaming response."""
-    request.stream = True
-    
-    async def generate():
-        try:
-            response = await message_handler.handle_query(
-                request=request,
-                tenant_context=tenant_context
-            )
-            yield response.answer
-        except Exception as e:
-            yield f"Error: {str(e)}"
-    
-    return StreamingResponse(
-        generate(),
-        media_type="text/event-stream"
-    )
-
-
-# ===== Provisioning Endpoints =====
-
-@app.post(f"{settings.api_prefix}/provision/kb", response_model=ProvisionKBResponse)
-async def provision_kb(
-    request: ProvisionKBRequest,
-    tenant_context: TenantContext = Depends(get_tenant_context)
-):
-    """
-    Provision a new Knowledge Base.
-    
-    Triggers the KB installation workflow:
-    1. Register KB
-    2. Generate hello_id
-    3. Trigger connector sync
-    4. Start ingestion
-    """
-    logger.info(
-        "KB provision request",
-        tenant_id=tenant_context.tenant_id,
-        kb_name=request.kb_config.name
-    )
-    
-    try:
-        response = await message_handler.handle_provision_kb(
-            request=request,
-            tenant_context=tenant_context
-        )
-        return response
-    except PermissionError as e:
-        raise HTTPException(status_code=403, detail=str(e))
-    except Exception as e:
-        logger.error("KB provisioning failed", error=str(e))
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post(f"{settings.api_prefix}/provision/bot", response_model=ProvisionBotResponse)
-async def provision_bot(
-    request: ProvisionBotRequest,
-    tenant_context: TenantContext = Depends(get_tenant_context)
-):
-    """Provision a new bot."""
-    logger.info(
-        "Bot provision request",
-        tenant_id=tenant_context.tenant_id,
-        bot_name=request.name
-    )
-    
-    try:
-        response = await message_handler.handle_provision_bot(
-            request=request,
-            tenant_context=tenant_context
-        )
-        return response
-    except PermissionError as e:
-        raise HTTPException(status_code=403, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-# ===== Testing Endpoints =====
-
-@app.post(f"{settings.api_prefix}/test", response_model=TestBotResponse)
-async def test_bot(
-    request: TestBotRequest,
-    tenant_context: TenantContext = Depends(get_tenant_context)
-):
-    """
-    Run automated tests against a bot.
-    
-    Used to validate bot before activation.
-    """
-    logger.info(
-        "Bot test request",
-        tenant_id=tenant_context.tenant_id,
-        bot_id=request.bot_id
-    )
-    
-    try:
-        response = await message_handler.handle_test_bot(
-            request=request,
-            tenant_context=tenant_context
-        )
-        return response
-    except PermissionError as e:
-        raise HTTPException(status_code=403, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post(f"{settings.api_prefix}/activate")
-async def activate_bot(
-    bot_id: str,
-    tenant_context: TenantContext = Depends(get_tenant_context)
-):
-    """Activate a bot after successful testing."""
-    logger.info(
-        "Bot activation request",
-        tenant_id=tenant_context.tenant_id,
-        bot_id=bot_id
-    )
-    
-    # TODO: Implement activation logic
-    return {"status": "activated", "bot_id": bot_id}
-
-
-# ===== Tool Endpoints =====
-
-@app.get(f"{settings.api_prefix}/tools")
-async def list_tools(
-    tenant_context: TenantContext = Depends(get_tenant_context)
-):
-    """List available tools."""
-    tools = tool_registry.get_all_tools()
-    return {
-        "tools": [
-            {
-                "name": t.name,
-                "description": t.description,
-                "parameters": [p.dict() for p in t.parameters]
-            }
-            for t in tools
-        ]
-    }
-
-
-@app.post(f"{settings.api_prefix}/tools/{{tool_name}}/execute", response_model=ToolExecutionResponse)
-async def execute_tool(
-    tool_name: str,
-    request: ToolExecutionRequest,
-    tenant_context: TenantContext = Depends(get_tenant_context)
-):
-    """Execute a tool directly."""
-    request.tool_name = tool_name
-    
-    response = await tool_registry.execute_tool(
-        request=request,
-        tenant_context=tenant_context
-    )
-    
-    if not response.success:
-        raise HTTPException(status_code=400, detail=response.error)
-    
-    return response
-
-
-# ===== Connector Endpoints =====
-
-@app.post(f"{settings.api_prefix}/connectors/sync", response_model=ConnectorSyncResponse)
-async def trigger_connector_sync(
-    request: ConnectorSyncRequest,
-    tenant_context: TenantContext = Depends(get_tenant_context)
-):
-    """Trigger a connector sync."""
-    logger.info(
-        "Connector sync triggered",
-        tenant_id=tenant_context.tenant_id,
-        connector_id=request.connector_id
-    )
-    
-    # TODO: Call connector gateway
-    return ConnectorSyncResponse(
-        job_id="sync-job-123",
-        status="syncing",
-        documents_found=0,
-        message="Sync initiated"
-    )
-
-
-@app.get(f"{settings.api_prefix}/connectors/{{connector_id}}/status")
-async def get_connector_status(
-    connector_id: str,
-    tenant_context: TenantContext = Depends(get_tenant_context)
-):
-    """Get connector status."""
-    # TODO: Get from connector registry
-    return {
-        "connector_id": connector_id,
-        "health": "healthy",
-        "last_sync": None,
-        "documents_indexed": 0
-    }
-
-
-# ===== Admin Endpoints =====
-
-@app.get(f"{settings.api_prefix}/admin/stats")
-async def get_stats(
-    tenant_context: TenantContext = Depends(get_tenant_context)
-):
-    """Get MCP server statistics."""
-    return {
-        "tenant_id": tenant_context.tenant_id,
-        "queries_processed": 0,  # TODO: Track
-        "tools_available": len(tool_registry.get_all_tools()) if tool_registry else 0,
-        "active_sessions": 0  # TODO: Track
-    }
-
-
-# ===== Run Server =====
-
-def main():
-    """Run the MCP server."""
+def main() -> None:
+    """uvicorn entry point — invoked by ``python -m src.main``."""
     uvicorn.run(
         "src.main:app",
         host=settings.api_host,
         port=settings.api_port,
-        reload=settings.debug
+        reload=settings.debug,
     )
 
-
-
-
-@app.get("/metrics", include_in_schema=False)
-async def prometheus_metrics():
-    """Expose Prometheus metrics for scraping."""
-    try:
-        from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
-        from fastapi.responses import Response
-        return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
-    except ImportError:
-        from fastapi.responses import Response
-        return Response(status_code=404, content=b"prometheus_client not installed")
 
 if __name__ == "__main__":
     main()

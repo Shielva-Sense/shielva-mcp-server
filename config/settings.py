@@ -68,7 +68,7 @@ class MCPSettings(BaseSettings):
     kb_routing_top_kbs: int = 2
     
     # Connector Gateway
-    connector_gateway_url: str = "http://localhost:8003"
+    connector_gateway_url: str = "https://localhost:8003"
     connector_timeout_seconds: int = 30
     
     # Security

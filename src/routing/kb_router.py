@@ -66,12 +66,16 @@ class KBRouter:
             desc = kb.get("description", "")
             descriptors.append(f"{name}. {desc}".strip(". ") or name or kb.get("id", ""))
 
-        # Embed query + all descriptors in one batched call
+        # Embed query + all descriptors in one batched call.
+        # EmbeddingClient exposes `embed()` (not `embed_batch()`); this
+        # call has been silently raising AttributeError → falling into
+        # the except below → router degraded to "return all KBs" so
+        # routing was effectively disabled.
         texts_to_embed = [query] + descriptors
         try:
-            embeddings = await self.embedding_client.embed_batch(texts_to_embed)
+            embeddings = await self.embedding_client.embed(texts_to_embed)
         except Exception as exc:
-            logger.warning("KBRouter.embed_batch failed, using all KBs", error=str(exc))
+            logger.warning("KBRouter.embed failed, using all KBs", error=str(exc))
             return [kb["id"] for kb in kb_configs if "id" in kb]
 
         if not embeddings or len(embeddings) != len(texts_to_embed):

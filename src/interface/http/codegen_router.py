@@ -11,6 +11,10 @@ Caller:   integration-builder (shielva-connectors) when LLM_MODE=mcp
 Security: Requires X-Tenant-ID header (same as every MCP endpoint).
           Skips the MongoDB permission lookup that user-facing queries do —
           this is an internal service-to-service call.
+
+This route is single-shot text-in / text-out. For caller-driven tool
+calling, use ``POST /mcp/v1/chat/complete`` instead — the codegen
+endpoint stays scoped to its integration-builder use case.
 """
 from __future__ import annotations
 
@@ -194,30 +198,40 @@ class CodegenFixAgentResponse(BaseModel):
     tokens_used: int = 0
 
 
+_CODEGEN_TOOL_NAMES = (
+    "codegen_validate_python",
+    "codegen_analyze_imports",
+    "codegen_categorize_error",
+    "codegen_check_pytest_structure",
+)
+
+
 @codegen_router.post("/fix-agent", response_model=CodegenFixAgentResponse)
 async def codegen_fix_agent(
     body: CodegenFixAgentRequest,
     request: Request,
     tenant_context: TenantContext = Depends(_extract_tenant),
 ) -> CodegenFixAgentResponse:
+    """Migrated onto :class:`CompleteWithToolLoopUseCase` in slice 4c.
+
+    The fix-agent route no longer touches ``llm_router.execute`` or
+    the raw ``tool_registry`` — it builds a domain :class:`LLMMessage`
+    history, pulls the codegen tool schemas via the use case's
+    catalogue port, and runs the loop end-to-end through clean
+    application surfaces. Behaviour on the wire is identical.
     """
-    Use MCP's tool-calling agent loop to intelligently fix broken connector code.
+    use_case = getattr(request.app.state, "complete_with_tool_loop_use_case", None)
+    tool_svc = getattr(request.app.state, "tool_app_service", None)
+    if use_case is None or tool_svc is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Fix-agent use case not wired; check composition root",
+        )
 
-    The agent:
-      1. Calls codegen_categorize_error to classify the failure
-      2. Calls codegen_check_pytest_structure or codegen_analyze_imports based on category
-      3. Generates a targeted fix using the gathered intelligence
-      4. Validates the fix with codegen_validate_python before returning
+    # System + user prompts — same content as before, framed as
+    # domain LLMMessage tuples.
+    from src.domain.llm.value_objects import LLMMessage, MessageRole, ModelId
 
-    This gives smarter, more targeted fixes than a single LLM call with just the error string.
-    """
-    llm_router = getattr(request.app.state, "llm_router", None)
-    tool_registry = getattr(request.app.state, "tool_registry", None)
-
-    if llm_router is None:
-        raise HTTPException(status_code=503, detail="MCP LLM router not initialized")
-
-    # Build system prompt for the fix agent
     system = (
         "You are an expert Python connector developer for the Shielva Integration Builder.\n"
         "Your job is to fix broken Python connector or test code by:\n"
@@ -230,7 +244,6 @@ async def codegen_fix_agent(
         f"Context from previous steps: {body.step_memory_summary or 'none'}\n\n"
         "CRITICAL: Your final response must be ONLY valid Python code starting with imports or class definition."
     )
-
     user_message = (
         f"Fix this broken Python code.\n\n"
         f"## Error Output\n```\n{body.error_output[:3000]}\n```\n\n"
@@ -238,34 +251,35 @@ async def codegen_fix_agent(
         "Use the available tools to diagnose the error category and structural issues, "
         "then return the complete fixed Python code."
     )
+    messages = (
+        LLMMessage(role=MessageRole.SYSTEM, content=system),
+        LLMMessage(role=MessageRole.USER,   content=user_message),
+    )
 
-    messages = [
-        {"role": "system", "content": system},
-        {"role": "user", "content": user_message},
-    ]
-
-    # Get codegen tools for the agent
-    tools = []
-    if tool_registry is not None:
-        # Fetch just the codegen tools (not rag_query etc.)
-        codegen_tool_names = {
-            "codegen_validate_python",
-            "codegen_analyze_imports",
-            "codegen_categorize_error",
-            "codegen_check_pytest_structure",
+    # Build the OpenAI tool schemas for just the codegen tools.
+    # We translate from the new domain Tool entities so the loop sees
+    # exactly what the catalogue reports — no parallel filtering.
+    from src.domain.shared.tenant import TenantContext as DomainTenant
+    domain_tenant = DomainTenant(
+        tenant_id   = tenant_context.tenant_id,
+        user_id     = tenant_context.user_id,
+        user_email  = tenant_context.user_email,
+        role        = tenant_context.role,
+        permissions = tuple(tenant_context.permissions or ()),
+    )
+    all_tools = await tool_svc.list_tools(tenant=domain_tenant)
+    codegen_tools = [t for t in all_tools if str(t.name) in _CODEGEN_TOOL_NAMES]
+    tool_schemas = tuple(
+        {
+            "type": "function",
+            "function": {
+                "name":        str(t.name),
+                "description": t.description,
+                "parameters":  t.input_schema.json_schema,
+            },
         }
-        all_tools = tool_registry.get_all_tools()
-        from src.routing.llm_router import ToolSpec
-        for t in all_tools:
-            if t.name in codegen_tool_names:
-                registered = tool_registry._tools.get(t.name)
-                if registered:
-                    tools.append(ToolSpec(
-                        name=t.name,
-                        description=t.description,
-                        parameters=tool_registry._build_parameters_schema(t),
-                        handler=registered.handler,
-                    ))
+        for t in codegen_tools
+    )
 
     logger.info(
         "codegen.fix_agent",
@@ -273,49 +287,61 @@ async def codegen_fix_agent(
         model_override=body.model,
         connector_class=body.connector_class,
         error_preview=body.error_output[:100],
-        tools_available=len(tools),
+        tools_available=len(tool_schemas),
     )
 
+    from src.application.llm import ToolLoopInput
     try:
-        response = await llm_router.execute(
-            messages=messages,
-            tools=tools or None,
-            tenant_context=tenant_context,
-            stream=False,
-            model=body.model,
+        result = await use_case.execute(
+            input_ = ToolLoopInput(
+                messages       = messages,
+                tools          = tool_schemas,
+                model          = ModelId(body.model) if body.model else None,
+                max_tokens     = body.max_tokens,
+                temperature    = body.temperature,
+                max_iterations = 5,
+            ),
+            tenant = domain_tenant,
         )
-    except Exception as exc:
-        logger.error("codegen.fix_agent_failed", error=str(exc), tenant_id=tenant_context.tenant_id)
-        safe_detail = f"Fix agent failed: {type(exc).__name__}"
-        raise HTTPException(status_code=500, detail=safe_detail) from exc
+    except Exception as exc:  # noqa: BLE001
+        logger.error(
+            "codegen.fix_agent_failed",
+            error=str(exc), tenant_id=tenant_context.tenant_id,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=f"Fix agent failed: {type(exc).__name__}",
+        ) from exc
 
-    fixed_code = response.answer.strip()
-    # Strip markdown fences if the LLM added them (handles ```python, ``` python, etc.)
+    # Strip optional ```python fences from the model's output.
+    fixed_code = (result.answer or "").strip()
     if fixed_code.startswith("```"):
         lines = fixed_code.split("\n")
-        # First line is the opening fence (```python, ```py, ``` etc.) — always remove it
-        if lines[0].strip().startswith("```"):
+        if lines and lines[0].strip().startswith("```"):
             lines = lines[1:]
-        # Last line is the closing fence — remove it
         if lines and lines[-1].strip() == "```":
             lines = lines[:-1]
         fixed_code = "\n".join(lines)
 
-    tools_called = [tc.tool_name for tc in (response.tool_calls or [])]
+    tools_called = [tc.name for tc in result.executed]
 
     logger.info(
         "codegen.fix_agent_ok",
         tenant_id=tenant_context.tenant_id,
-        model=response.model,
-        tokens_used=response.tokens_used,
+        model=str(result.model),
+        tokens_used=result.tokens_used,
         tools_called=tools_called,
         fixed_code_length=len(fixed_code),
+        iterations=result.iterations,
+        truncated=result.truncated,
     )
 
     return CodegenFixAgentResponse(
-        fixed_code=fixed_code,
-        fix_explanation=f"Fixed via MCP agent (tools used: {', '.join(tools_called) or 'none'})",
-        tools_called=tools_called,
-        model=response.model,
-        tokens_used=response.tokens_used,
+        fixed_code      = fixed_code,
+        fix_explanation = (
+            f"Fixed via MCP agent (tools used: {', '.join(tools_called) or 'none'})"
+        ),
+        tools_called    = tools_called,
+        model           = str(result.model),
+        tokens_used     = result.tokens_used,
     )

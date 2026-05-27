@@ -11,7 +11,8 @@ from .models import (
     ProvisionKBRequest, ProvisionKBResponse,
     ProvisionBotRequest, ProvisionBotResponse,
     TestBotRequest, TestBotResponse,
-    TenantContext, SessionContext, MCPMessage, MessageRole
+    TenantContext, SessionContext, MCPMessage, MessageRole,
+    Source,
 )
 from src.security import PolicyContext
 
@@ -121,10 +122,27 @@ class MessageHandler:
             
             # Calculate latency
             latency_ms = int((datetime.utcnow() - start_time).total_seconds() * 1000)
-            
+
+            # Map RetrievalResult chunks → Source objects for the response
+            sources: list[Source] = []
+            for chunk in context.retrieved_chunks:
+                try:
+                    sources.append(Source(
+                        kb_id=getattr(chunk, "kb_id", ""),
+                        kb_name=getattr(chunk, "kb_name", chunk.metadata.get("kb_name", "")),
+                        document_id=getattr(chunk, "document_id", chunk.metadata.get("document_id", "")),
+                        document_title=getattr(chunk, "document_title", chunk.metadata.get("title", "")),
+                        chunk_id=getattr(chunk, "chunk_id", ""),
+                        content=chunk.content[:200],  # trim for wire size
+                        score=round(chunk.score, 4),
+                        metadata={},
+                    ))
+                except Exception:
+                    pass  # never let source mapping break the query response
+
             return MCPQueryResponse(
                 answer=result.answer,
-                sources=result.sources,
+                sources=sources,
                 tool_calls=result.tool_calls,
                 tokens_used=result.tokens_used,
                 latency_ms=latency_ms,

@@ -102,22 +102,33 @@ class EmbeddingClient:
             return self._embed_mock(texts)
     
     async def _embed_gemini(self, texts: List[str]) -> List[List[float]]:
-        """Generate embeddings using Google Gemini."""
+        """Generate embeddings using Google Gemini.
+
+        Honours ``self.config.dimension`` via Gemini's
+        ``output_dimensionality`` parameter. Without it the SDK
+        returns the model's native dim (e.g. ``models/gemini-embedding-001``
+        is 3072) which silently mismatches downstream pgvector
+        columns sized to 768. The /metrics response and downstream
+        callers were already advertising the configured dim — this
+        makes the actual vectors honour it too.
+        """
         try:
             import google.generativeai as genai
-            
+
             genai.configure(api_key=self.config.api_key)
-            
-            # Gemini batch embedding
-            # "models/text-embedding-004"
-            result = genai.embed_content(
-                model=self.config.model,
-                content=texts,
-                task_type="retrieval_document"
-            )
-            
+
+            kwargs = {
+                "model":     self.config.model,
+                "content":   texts,
+                "task_type": "retrieval_document",
+            }
+            if self.config.dimension:
+                kwargs["output_dimensionality"] = int(self.config.dimension)
+
+            result = genai.embed_content(**kwargs)
+
             return result['embedding']
-            
+
         except Exception as e:
             logger.error("Gemini embedding failed", error=str(e))
             return self._embed_mock(texts)
