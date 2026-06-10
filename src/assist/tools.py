@@ -6,34 +6,37 @@ and control the CMS UI.
 """
 from typing import Dict, Any, List, Optional
 from datetime import datetime, timezone
+import os
+
 import httpx
 import structlog
 
+from shielva_common.tls import internal_ca_verify
 from src.routing.llm_router import ToolSpec
 
 logger = structlog.get_logger(__name__)
 
-CMS_CORE_URL = "https://localhost:8020/api/v1/cms"
+CMS_CORE_URL = os.getenv("CMS_CORE_URL", "https://localhost:8020/api/v1/cms")
 
 
 # ── Tool Handlers ─────────────────────────────────────────────────────
 
 async def _cms_get(path: str, params: dict = None) -> Any:
-    async with httpx.AsyncClient(verify=False, timeout=10.0) as c:
+    async with httpx.AsyncClient(verify=internal_ca_verify(), timeout=10.0) as c:
         r = await c.get(f"{CMS_CORE_URL}{path}", params=params or {})
         r.raise_for_status()
         return r.json()
 
 
 async def _cms_post(path: str, body: dict) -> Any:
-    async with httpx.AsyncClient(verify=False, timeout=10.0) as c:
+    async with httpx.AsyncClient(verify=internal_ca_verify(), timeout=10.0) as c:
         r = await c.post(f"{CMS_CORE_URL}{path}", json=body)
         r.raise_for_status()
         return r.json()
 
 
 async def _cms_put(path: str, body: dict) -> Any:
-    async with httpx.AsyncClient(verify=False, timeout=10.0) as c:
+    async with httpx.AsyncClient(verify=internal_ca_verify(), timeout=10.0) as c:
         r = await c.put(f"{CMS_CORE_URL}{path}", json=body)
         r.raise_for_status()
         return r.json()

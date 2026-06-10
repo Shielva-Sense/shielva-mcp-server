@@ -114,7 +114,8 @@ class MessageHandler:
                 messages=context.messages,
                 tools=tools,
                 tenant_context=tenant_context,
-                stream=request.stream
+                stream=request.stream,
+                model=getattr(request, "model", None),  # per-bot override; tenant key/provider still apply
             )
             
             # 6. Update session

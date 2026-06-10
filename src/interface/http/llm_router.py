@@ -32,11 +32,13 @@ modification of an existing one.
 """
 from __future__ import annotations
 
+import json
 import os
 from typing import Any, Dict, List, Literal, Optional, Union
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from src.application.llm           import LLMApplicationService
@@ -45,6 +47,7 @@ from src.domain.llm.value_objects  import (
 )
 
 from ._deps import get_domain_tenant
+from src.infrastructure.entitlements import require_llm_entitlement
 
 logger = structlog.get_logger(__name__)
 
@@ -124,7 +127,11 @@ def _service(request: Request) -> LLMApplicationService:
 
 # ── Route ─────────────────────────────────────────────────────────
 
-@llm_router.post("/llm/complete", response_model=LLMCompleteResponse)
+@llm_router.post(
+    "/llm/complete",
+    response_model=LLMCompleteResponse,
+    dependencies=[Depends(require_llm_entitlement)],
+)
 async def llm_complete(
     request: Request,
     body:    LLMCompleteRequest,
@@ -197,4 +204,83 @@ async def llm_complete(
         model         = str(response.model),
         tokens_used   = response.usage.total_tokens,
         finish_reason = response.finish_reason.value,
+    )
+
+
+@llm_router.post(
+    "/llm/complete/stream",
+    dependencies=[Depends(require_llm_entitlement)],
+)
+async def llm_complete_stream(
+    request: Request,
+    body:    LLMCompleteRequest,
+    tenant=Depends(get_domain_tenant),
+) -> StreamingResponse:
+    """Token-by-token streaming variant of ``/llm/complete`` (Server-Sent Events).
+
+    Frames (``text/event-stream``):
+      * ``data: {"delta": "...", "model": "..."}``           per token
+      * ``data: {"delta": "", "finish_reason": "stop", ...}`` final token
+      * ``data: [DONE]``                                       terminal sentinel
+      * ``event: error\\ndata: {"error": "...", ...}``         on failure
+
+    Tools are NOT supported on the streaming path (text-only). Use the
+    non-streaming ``/llm/complete`` for tool-calling loops.
+    """
+    service = _service(request)
+
+    # Same wire→domain translation as /llm/complete (kept inline so the
+    # non-streaming path is untouched).
+    domain_messages = tuple(
+        LLMMessage(
+            role         = MessageRole(m.role),
+            content      = m.content or "",
+            tool_calls   = tuple(
+                LLMToolCall(
+                    id        = tc.id,
+                    name      = tc.function.name,
+                    arguments = tc.function.arguments or "{}",
+                )
+                for tc in (m.tool_calls or [])
+            ),
+            tool_call_id = m.tool_call_id or "",
+            name         = m.name or "",
+        )
+        for m in body.messages
+    )
+
+    domain_request = LLMRequest(
+        messages    = domain_messages,
+        model       = ModelId(body.model) if body.model else None,
+        max_tokens  = body.max_tokens,
+        temperature = body.temperature,
+        tools       = None,
+        tool_choice = None,
+        stream      = True,
+    )
+
+    async def _event_stream():
+        try:
+            async for chunk in service.stream(domain_request, tenant=tenant):
+                payload: Dict[str, Any] = {"delta": chunk.delta, "model": str(chunk.model)}
+                if chunk.finish_reason is not None:
+                    payload["finish_reason"] = chunk.finish_reason.value
+                yield f"data: {json.dumps(payload)}\n\n"
+            yield "data: [DONE]\n\n"
+        except Exception as exc:  # noqa: BLE001
+            logger.error(
+                "llm_complete_stream_failed",
+                tenant_id=tenant.tenant_id, error=str(exc)[:200],
+            )
+            err = json.dumps({"error": type(exc).__name__, "detail": str(exc)[:200]})
+            yield f"event: error\ndata: {err}\n\n"
+
+    return StreamingResponse(
+        _event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",   # disable proxy buffering so tokens flush
+        },
     )

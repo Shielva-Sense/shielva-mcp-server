@@ -4,6 +4,7 @@ Embedding generation using various providers.
 """
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
+import asyncio
 import structlog
 
 logger = structlog.get_logger(__name__)
@@ -16,7 +17,9 @@ class EmbedderConfig:
     model: str = "text-embedding-3-small"
     api_key: str = ""
     batch_size: int = 100
-    dimension: int = 1536
+    # 768 matches Gemini models/gemini-embedding-001 + the pgvector columns the
+    # ingestion worker writes. The old 1536 default was an OpenAI-era leftover.
+    dimension: int = 768
 
 
 class EmbeddingClient:
@@ -115,8 +118,18 @@ class EmbeddingClient:
         try:
             import google.generativeai as genai
 
-            genai.configure(api_key=self.config.api_key)
+            # Unwrap SecretStr — sealed-config hands the key as a SecretStr; the
+            # SDK would put the object straight into the x-goog-api-key header
+            # ("must be of type str or bytes, not SecretStr") and every embed
+            # fails, yielding an empty query vector and zero retrieval hits.
+            _key = self.config.api_key
+            if hasattr(_key, "get_secret_value"):
+                _key = _key.get_secret_value()
 
+            # Force REST transport (see _call below). The SDK defaults to gRPC,
+            # which to generativelanguage.googleapis.com stalls until a 60s deadline
+            # ("504 Deadline Exceeded") in this environment, hanging every query
+            # embed. REST returns in <1s for the same call/key.
             kwargs = {
                 "model":     self.config.model,
                 "content":   texts,
@@ -125,7 +138,16 @@ class EmbeddingClient:
             if self.config.dimension:
                 kwargs["output_dimensionality"] = int(self.config.dimension)
 
-            result = genai.embed_content(**kwargs)
+            # genai.embed_content is a BLOCKING network call (the SDK's REST path
+            # is synchronous). Running it directly in the async hot path stalls the
+            # event loop for the full Gemini RTT (~100-400ms), serialising every
+            # concurrent query. Run configure+embed together off-thread so the loop
+            # stays free (configure+embed kept atomic to avoid a global-key race).
+            def _call():
+                genai.configure(api_key=_key, transport="rest")
+                return genai.embed_content(**kwargs)
+
+            result = await asyncio.to_thread(_call)
 
             return result['embedding']
 

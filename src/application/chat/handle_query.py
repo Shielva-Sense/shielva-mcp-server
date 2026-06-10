@@ -63,6 +63,7 @@ class HandleQueryInput:
     context:       Dict[str, Any]           = None  # type: ignore[assignment]
     tool_options:  Dict[str, bool]          = None  # type: ignore[assignment]
     custom_prompt: Optional[str]            = None
+    model:         Optional[str]            = None  # per-bot LLM model override
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,6 +120,7 @@ class HandleQueryUseCase:
             context       = dict(input_.context or {}),
             tool_options  = dict(input_.tool_options or {}),
             custom_prompt = input_.custom_prompt,
+            model         = input_.model,
         )
         legacy_tenant = LegacyTenant(
             tenant_id   = tenant.tenant_id,
