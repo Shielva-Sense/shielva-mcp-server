@@ -42,29 +42,27 @@ from src.registry.tool_registry import ToolRegistry, create_registry_with_defaul
 
 # Configure logging
 import logging
+import uuid
 import sys
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(message)s",
-    stream=sys.stdout
-)
+
+settings = get_settings()
 
 structlog.configure(
     processors=[
-        structlog.stdlib.filter_by_level,
-        structlog.stdlib.add_logger_name,
+        structlog.contextvars.merge_contextvars,
         structlog.stdlib.add_log_level,
         structlog.processors.TimeStamper(fmt="iso"),
-        structlog.processors.JSONRenderer()
+        structlog.processors.StackInfoRenderer(),
+        structlog.processors.JSONRenderer(),
     ],
-    wrapper_class=structlog.stdlib.BoundLogger,
+    wrapper_class=structlog.make_filtering_bound_logger(
+        logging.getLevelName(settings.log_level.upper())
+    ),
     context_class=dict,
-    logger_factory=structlog.stdlib.LoggerFactory(),
-    cache_logger_on_first_use=True,
+    logger_factory=structlog.PrintLoggerFactory(),
 )
 
 logger = structlog.get_logger(__name__)
-settings = get_settings()
 
 # Global instances
 tool_registry: ToolRegistry = None
@@ -117,14 +115,19 @@ async def lifespan(app: FastAPI):
     # Initialize MongoDB
     from motor.motor_asyncio import AsyncIOMotorClient
     try:
-        import certifi as _c; _tls = {"tlsCAFile": _c.where()} if settings.mongodb_url.startswith("mongodb+srv") else {}
+        # settings.mongodb_url may be a Pydantic SecretStr — unwrap before calling startswith
+        _url_str = settings.mongodb_url.get_secret_value() if hasattr(settings.mongodb_url, "get_secret_value") else str(settings.mongodb_url)
+        import certifi as _c; _tls = {"tlsCAFile": _c.where()} if _url_str.startswith("mongodb+srv") else {}
     except ImportError:
         _tls = {}
-    mongo_client = AsyncIOMotorClient(settings.mongodb_url, **_tls)
+        _url_str = settings.mongodb_url.get_secret_value() if hasattr(settings.mongodb_url, "get_secret_value") else str(settings.mongodb_url)
+    mongo_client = AsyncIOMotorClient(_url_str, **_tls)
     
     # Initialize Vector Store
     # Use SUPABASE_DB_URL if available, else construct/warn
-    db_url = settings.supabase_db_url
+    _raw_db_url = settings.supabase_db_url
+    # Unwrap Pydantic SecretStr — 'in' / split() / startswith() fail on SecretStr directly
+    db_url = _raw_db_url.get_secret_value() if hasattr(_raw_db_url, "get_secret_value") else (_raw_db_url or "")
     if not db_url and settings.supabase_url:
         # Warn user or try to construct? 
         # For now we rely on db_url being set in server.sh
@@ -338,6 +341,22 @@ app = FastAPI(
     description="The AI Operating System for Shielva ARC",
     lifespan=lifespan
 )
+
+# Exception handlers — must be installed before middleware and routes.
+from src.core.error_handlers import install_exception_handlers  # noqa: E402
+install_exception_handlers(app)
+
+
+@app.middleware("http")
+async def correlation_id_middleware(request: Request, call_next):  # type: ignore[no-untyped-def]
+    cid = request.headers.get("X-Correlation-Id") or uuid.uuid4().hex
+    structlog.contextvars.clear_contextvars()
+    structlog.contextvars.bind_contextvars(correlation_id=cid)
+    request.state.request_id = cid
+    response = await call_next(request)
+    response.headers["X-Correlation-Id"] = cid
+    return response
+
 
 # SOP observability: traces + /sop-metrics + optional self-registration.
 # Must run before other middleware so the metrics middleware sees the

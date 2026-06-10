@@ -4,14 +4,17 @@ Shielva Assist — Live Tenant Context Builder
 Fetches real tenant data from CMS Core to give the LLM
 accurate, up-to-date context about the user's configuration.
 """
+import os
 from typing import Optional, Dict, Any
 import httpx
 import structlog
 
+from shielva_common.tls import internal_ca_verify
+
 logger = structlog.get_logger(__name__)
 
 # CMS Core base URL (internal, through gateway or direct)
-CMS_CORE_URL = "https://localhost:8020/api/v1/cms"
+CMS_CORE_URL = os.getenv("CMS_CORE_URL", "https://localhost:8020/api/v1/cms")
 
 
 async def fetch_tenant_context(tenant_id: str, context_page: Optional[str] = None) -> str:
@@ -24,7 +27,7 @@ async def fetch_tenant_context(tenant_id: str, context_page: Optional[str] = Non
         return "No tenant selected."
 
     sections = []
-    async with httpx.AsyncClient(verify=False, timeout=5.0) as client:
+    async with httpx.AsyncClient(verify=internal_ca_verify(), timeout=5.0) as client:
         # Fetch intents
         try:
             r = await client.get(f"{CMS_CORE_URL}/intents", params={"tenant_id": tenant_id})

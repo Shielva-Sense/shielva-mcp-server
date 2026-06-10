@@ -15,10 +15,23 @@ from litellm import acompletion
 import json
 
 from src.protocol.models import TenantContext, ToolCall, ToolCallStatus, Source
+from src.routing.tenant_llm_resolver import get_tenant_llm_resolver, format_model_for_provider
 from config.settings import get_settings
 
 logger = structlog.get_logger(__name__)
 settings = get_settings()
+
+
+def _unwrap_secret(value):
+    """Return the plaintext of a SecretStr-like setting (or the value itself).
+
+    Sealed-config holds API keys as ``SecretStr``; litellm needs the raw string.
+    Returns ``None`` for empty/missing keys so the caller falls through cleanly.
+    """
+    if value is None:
+        return None
+    raw = value.get_secret_value() if hasattr(value, "get_secret_value") else str(value)
+    return raw or None
 
 # Configure LiteLLM
 litellm.set_verbose = settings.debug
@@ -96,37 +109,72 @@ class LLMRouter:
             tools: Optional list of tools for function calling
             tenant_context: Tenant context for tracking
             stream: Whether to stream response
-            model: Optional model override
-            
+            model: Optional model override (an explicit caller override wins over
+                   per-tenant routing)
+
         Returns:
             LLMResponse with answer and metadata
         """
+        # Per-tenant routing: when the caller did NOT pin a model, ask
+        # shielva-platform for this tenant's active provider/model + BYOK key.
+        # A miss (no config / managed tier / error) returns None and we fall
+        # through to the platform default — never a regression.
+        # `model` here is an optional PER-BOT override (a bare model id like
+        # "gemini-2.5-pro"). The tenant config is ALWAYS resolved for the key +
+        # provider + tenant-default model — even when a per-bot model is given —
+        # so a BYOK tenant keeps using its own key with the bot's chosen model
+        # (previously an explicit model skipped resolution and leaked to the
+        # platform key). The bot's bare model is formatted with the tenant's
+        # provider; with no per-bot override the tenant default is used.
+        tenant_api_key: Optional[str] = None
+        tenant_api_base: Optional[str] = None
+        if tenant_context is not None:
+            resolved = await get_tenant_llm_resolver().resolve(
+                getattr(tenant_context, "tenant_id", None)
+            )
+            if resolved is not None:
+                tenant_api_key = resolved.api_key
+                tenant_api_base = resolved.api_base
+                if model:
+                    model = format_model_for_provider(resolved.provider, model)
+                else:
+                    model = resolved.model
+            elif model:
+                # No tenant config (platform default) but a per-bot override is
+                # set → format it with the platform's default provider.
+                model = format_model_for_provider(settings.default_llm_provider, model)
+
         model = model or self.default_model
-        
+
         logger.info(
             "Executing LLM request",
             model=model,
             num_messages=len(messages),
             has_tools=bool(tools),
-            stream=stream
+            stream=stream,
+            tenant_routed=bool(tenant_api_key or tenant_api_base),
         )
-        
+
         try:
             if stream:
                 return await self._execute_streaming(
                     messages=messages,
                     tools=tools,
                     model=model,
-                    tenant_context=tenant_context
+                    tenant_context=tenant_context,
+                    api_key=tenant_api_key,
+                    api_base=tenant_api_base,
                 )
             else:
                 return await self._execute_sync(
                     messages=messages,
                     tools=tools,
                     model=model,
-                    tenant_context=tenant_context
+                    tenant_context=tenant_context,
+                    api_key=tenant_api_key,
+                    api_base=tenant_api_base,
                 )
-                
+
         except Exception as e:
             logger.error("LLM execution failed", error=str(e), model=model)
             
@@ -155,22 +203,28 @@ class LLMRouter:
         messages: List[Dict[str, str]],
         tools: List[ToolSpec],
         model: str,
-        tenant_context: TenantContext
+        tenant_context: TenantContext,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
     ) -> LLMResponse:
         """
         Execute synchronous (non-streaming) LLM request.
-        
+
         Handles tool calls in a loop until completion.
+
+        api_key/api_base, when provided, are the tenant's BYOK credentials
+        (per-tenant routing); otherwise the platform key for the model is used.
         """
         all_tool_calls = []
         current_messages = messages.copy()
-        
+        extra = {"api_base": api_base} if api_base else {}
+
         # Tool calling loop
         max_iterations = 5
         for iteration in range(max_iterations):
             # Prepare tools for LiteLLM
             litellm_tools = self._prepare_tools(tools) if tools else None
-            
+
             # Call LLM
             response = await acompletion(
                 model=model,
@@ -179,7 +233,8 @@ class LLMRouter:
                 tool_choice="auto" if litellm_tools else None,
                 max_tokens=settings.max_tokens,
                 temperature=settings.temperature,
-                api_key=self._get_api_key(model)
+                api_key=api_key or self._get_api_key(model),
+                **extra,
             )
 
             message = response.choices[0].message
@@ -246,23 +301,28 @@ class LLMRouter:
         messages: List[Dict[str, str]],
         tools: List[ToolSpec],
         model: str,
-        tenant_context: TenantContext
+        tenant_context: TenantContext,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
     ) -> LLMResponse:
         """
         Execute streaming LLM request.
-        
-        Yields tokens as they're generated.
+
+        Yields tokens as they're generated. api_key/api_base, when provided,
+        are the tenant's BYOK credentials (per-tenant routing).
         """
         litellm_tools = self._prepare_tools(tools) if tools else None
-        
+        extra = {"api_base": api_base} if api_base else {}
+
         response = await acompletion(
             model=model,
             messages=messages,
             tools=litellm_tools,
             max_tokens=settings.max_tokens,
             temperature=settings.temperature,
-            api_key=self._get_api_key(model),
-            stream=True
+            api_key=api_key or self._get_api_key(model),
+            stream=True,
+            **extra,
         )
 
         full_response = ""
@@ -281,15 +341,21 @@ class LLMRouter:
         )
 
     def _get_api_key(self, model: str) -> Optional[str]:
-        """Return the correct API key for a given model string."""
+        """Return the correct API key for a given model string.
+
+        Settings hold these as ``SecretStr`` (sealed-config / envelope). They
+        MUST be unwrapped before reaching litellm — passing the SecretStr
+        object makes litellm stringify it to ``'**********'``, which the
+        providers reject as ``API_KEY_INVALID``.
+        """
         if "gemini" in model:
-            return settings.gemini_api_key
+            return _unwrap_secret(settings.gemini_api_key)
         if "claude" in model or "anthropic" in model:
-            return settings.anthropic_api_key
+            return _unwrap_secret(settings.anthropic_api_key)
         if "gpt" in model or "openai" in model:
-            return settings.openai_api_key
+            return _unwrap_secret(settings.openai_api_key)
         if "azure" in model:
-            return settings.azure_openai_api_key
+            return _unwrap_secret(settings.azure_openai_api_key)
         return None
 
     def _prepare_tools(self, tools: List[ToolSpec]) -> List[Dict[str, Any]]:

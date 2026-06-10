@@ -17,9 +17,10 @@ warrant a separate ``stream(...)`` method; we'll add it the day
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from typing import AsyncIterator
 
 from ..shared.tenant import TenantContext
-from .value_objects import LLMRequest, LLMResponse
+from .value_objects import LLMRequest, LLMResponse, LLMStreamChunk
 
 
 class LLMProvider(ABC):
@@ -51,3 +52,20 @@ class LLMProvider(ABC):
         return ``LLMResponse`` for both successful completions AND
         provider-side content-filter rejections (the caller can read
         ``finish_reason == CONTENT_FILTER`` and act)."""
+
+    def stream(
+        self,
+        request: LLMRequest,
+        *,
+        tenant: TenantContext,
+    ) -> AsyncIterator[LLMStreamChunk]:
+        """Yield assistant text deltas token-by-token (async generator).
+
+        Optional capability. The default raises ``NotImplementedError`` so
+        existing non-streaming adapters are unaffected (OCP — extend the port
+        without forcing every provider to implement streaming). Streaming-
+        capable adapters override this with an ``async def`` generator. Raise on
+        transport/auth errors before the first yield; a mid-stream failure
+        propagates to the caller (no silent provider fallback once tokens have
+        been emitted)."""
+        raise NotImplementedError("this provider does not support streaming")

@@ -23,6 +23,7 @@ from src.application.chat import HandleQueryInput, HandleQueryUseCase
 from src.protocol.models import MCPQueryRequest, MCPQueryResponse, Source, ToolCall
 
 from ._deps import get_domain_tenant
+from src.infrastructure.entitlements import require_llm_entitlement
 
 logger = structlog.get_logger(__name__)
 
@@ -43,7 +44,11 @@ def _use_case(request: Request) -> HandleQueryUseCase:
     return uc
 
 
-@query_router.post("/query", response_model=MCPQueryResponse)
+@query_router.post(
+    "/query",
+    response_model=MCPQueryResponse,
+    dependencies=[Depends(require_llm_entitlement)],
+)
 async def process_query(
     request:        Request,
     body:           MCPQueryRequest,
@@ -60,6 +65,7 @@ async def process_query(
                 context       = body.context,
                 tool_options  = body.tool_options,
                 custom_prompt = body.custom_prompt,
+                model         = body.model,
             ),
             tenant=tenant,
         )
@@ -84,7 +90,10 @@ async def process_query(
     )
 
 
-@query_router.post("/query/stream")
+@query_router.post(
+    "/query/stream",
+    dependencies=[Depends(require_llm_entitlement)],
+)
 async def process_query_stream(
     request:        Request,
     body:           MCPQueryRequest,

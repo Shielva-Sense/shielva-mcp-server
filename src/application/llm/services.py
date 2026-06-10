@@ -5,8 +5,10 @@ import time
 
 import structlog
 
+from typing import AsyncIterator
+
 from src.domain.llm.repositories import LLMProvider
-from src.domain.llm.value_objects import LLMRequest, LLMResponse
+from src.domain.llm.value_objects import LLMRequest, LLMResponse, LLMStreamChunk
 from src.domain.shared.tenant import TenantContext
 
 logger = structlog.get_logger(__name__)
@@ -58,3 +60,36 @@ class LLMApplicationService:
             duration_ms=duration_ms,
         )
         return response
+
+    async def stream(
+        self,
+        request: LLMRequest,
+        *,
+        tenant: TenantContext,
+    ) -> AsyncIterator[LLMStreamChunk]:
+        """Token-by-token streaming completion. Yields deltas as they arrive."""
+        started = time.monotonic()
+        logger.info(
+            "mcp.llm_stream_start",
+            tenant_id=tenant.tenant_id,
+            model=str(request.model) if request.model else "default",
+            msg_count=len(request.messages),
+        )
+        chunks = 0
+        try:
+            async for chunk in self._provider.stream(request, tenant=tenant):
+                chunks += 1
+                yield chunk
+        except Exception as exc:  # noqa: BLE001
+            duration_ms = int((time.monotonic() - started) * 1000)
+            logger.warning(
+                "mcp.llm_stream_failed",
+                tenant_id=tenant.tenant_id, duration_ms=duration_ms,
+                chunks=chunks, error=str(exc)[:200],
+            )
+            raise
+        duration_ms = int((time.monotonic() - started) * 1000)
+        logger.info(
+            "mcp.llm_stream_ok",
+            tenant_id=tenant.tenant_id, chunks=chunks, duration_ms=duration_ms,
+        )

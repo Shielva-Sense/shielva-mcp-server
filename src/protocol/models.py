@@ -92,6 +92,7 @@ class MCPQueryRequest(BaseModel):
     context: Dict[str, Any] = {}
     tool_options: Dict[str, bool] = {}  # Enable/disable specific tools
     custom_prompt: Optional[str] = None  # In-memory system prompt override from Studio
+    model: Optional[str] = None  # Per-bot LLM model override (bare id; tenant key/provider still apply)
 
 
 class ToolCall(BaseModel):

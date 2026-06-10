@@ -120,3 +120,16 @@ class LLMResponse:
     model:         ModelId                  = ModelId("")
     finish_reason: FinishReason             = FinishReason.OTHER
     usage:         LLMUsage                 = field(default_factory=LLMUsage)
+
+
+@dataclass(frozen=True, slots=True)
+class LLMStreamChunk:
+    """One streamed delta from a token-by-token completion.
+
+    ``delta`` is the incremental assistant text for this chunk (may be empty on
+    the terminal chunk). ``finish_reason`` is set only on the final chunk.
+    ``model`` identifies the provider model that served the stream.
+    """
+    delta:         str                      = ""
+    finish_reason: Optional[FinishReason]   = None
+    model:         ModelId                  = ModelId("")
