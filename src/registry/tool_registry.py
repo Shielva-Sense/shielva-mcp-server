@@ -251,13 +251,20 @@ class ToolRegistry:
         tenant_context: TenantContext
     ) -> bool:
         """Check if user has permission to use tool."""
+        # Shielva-internal service callers (identity == internal@shielva.ai)
+        # bypass tenant tool-permission gating: internal infra (e.g. the
+        # integration builder's codegen-guideline RAG) is not tenant feature
+        # use. Identity is gateway-controlled, so a tenant cannot forge it.
+        if (getattr(tenant_context, "user_email", "") or "").strip().lower() == "internal@shielva.ai":
+            return True
+
         required_perms = definition.requires_permissions
-        
+
         if not required_perms:
             return True
-        
+
         user_perms = set(tenant_context.permissions)
-        
+
         return all(perm in user_perms for perm in required_perms)
     
     def _build_parameters_schema(
