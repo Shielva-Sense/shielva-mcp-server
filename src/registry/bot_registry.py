@@ -1,9 +1,12 @@
-from typing import Dict, Any, Optional
+import copy
+import time
+from typing import Dict, Any, Optional, Tuple
 import structlog
 
 logger = structlog.get_logger(__name__)
 
 from config.settings import get_settings
+
 
 class BotRegistry:
     """
@@ -13,7 +16,17 @@ class BotRegistry:
     def __init__(self, mongodb_client=None):
         self.mongodb_client = mongodb_client
         self.settings = get_settings()
-        
+        # FIX #7: short TTL cache for resolved bot configs, keyed by
+        # (tenant_id, bot_id). Bot config + KB-group membership change rarely,
+        # but get_bot() runs on every turn (and again on the rag_query tool
+        # path) — one Mongo find_one + KB-group walk per turn. The cache key
+        # ALWAYS includes tenant_id so a bot config can never leak across
+        # tenants. Mirrors the monotonic-time + dict TTL pattern in
+        # tenant_llm_resolver. Stores a copy so callers mutating the returned
+        # dict can't corrupt the cached entry.
+        self._cache: Dict[Tuple[str, str], Tuple[float, Dict[str, Any]]] = {}
+        self._cache_ttl = max(0, getattr(self.settings, "bot_cache_ttl_seconds", 45))
+
     async def _find_customer(self, tenant_id: str) -> Optional[Dict[str, Any]]:
         """Fetch the customer document for *tenant_id* from the
         ``customerService`` collection.  Returns ``None`` when no match
@@ -24,10 +37,24 @@ class BotRegistry:
         db = self.mongodb_client[self.settings.mongodb_db_name]
         return await db.customerService.find_one({"tenant_id": tenant_id})
 
+    def invalidate(self, tenant_id: str, bot_id: str) -> None:
+        """Drop the cached config for a (tenant, bot). Call from provisioning
+        paths (bot edited, KBs (re)assigned) so the next get_bot() re-reads
+        Mongo instead of serving stale config for up to the TTL window."""
+        self._cache.pop((tenant_id, bot_id), None)
+
     async def get_bot(self, bot_id: str, tenant_id: str) -> Dict[str, Any]:
         """
         Get bot configuration by ID and tenant from CustomerProfile.customerService.
         """
+        # FIX #7: serve from the short TTL cache when fresh. This also dedupes
+        # the second identical fetch on the rag_query tool path within a turn.
+        cache_key = (tenant_id, bot_id)
+        if self._cache_ttl > 0:
+            entry = self._cache.get(cache_key)
+            if entry is not None and (time.monotonic() - entry[0]) < self._cache_ttl:
+                return copy.deepcopy(entry[1])
+
         if not self.mongodb_client:
             logger.warning("MongoDB client not initialized in BotRegistry")
             return self._get_mock_bot(bot_id)
@@ -75,6 +102,11 @@ class BotRegistry:
             bot["kbs"] = kb_ids  # keep kbs aligned with the resolved set for retrieval
 
             logger.info("Fetched bot config", bot_id=bot_id, name=bot.get("name"), kb_count=len(kb_ids))
+
+            # FIX #7: cache the successfully resolved config (never the mock
+            # fallback — we don't want to pin a transient DB error for the TTL).
+            if self._cache_ttl > 0:
+                self._cache[cache_key] = (time.monotonic(), copy.deepcopy(bot))
 
             return bot
             

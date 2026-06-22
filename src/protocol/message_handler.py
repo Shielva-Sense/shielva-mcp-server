@@ -14,7 +14,7 @@ from .models import (
     TenantContext, SessionContext, MCPMessage, MessageRole,
     Source,
 )
-from src.security import PolicyContext
+from src.security import normalize_role
 
 logger = structlog.get_logger(__name__)
 
@@ -279,25 +279,32 @@ class MessageHandler:
         action: str,
         resource_id: Optional[str]
     ) -> None:
-        """
-        Check if action is allowed by policy engine.
-        
+        """Authorize against the gateway-verified principal — the platform standard.
+
+        The API gateway verifies the signed ``X-Shielva-*`` principal (role + app
+        access) and every MCP handler scopes its data by ``tenant_id`` from that
+        principal, so MCP does NOT maintain a parallel RBAC matrix. That duplicated —
+        and silently diverged from — the IdP (shielva-identity), which is the single
+        owner of roles + policy. We require an authenticated, tenant-scoped principal
+        whose role resolves to a canonical platform role (platform_owner / tenant_admin
+        / developer). Tenant isolation is the enforced boundary, applied downstream by
+        tenant-scoped queries. Same model as ACP/TMS (shielva_common.auth).
+
         Raises:
-            PermissionError: If action is not allowed
+            PermissionError: if the request carries no authenticated tenant context.
         """
-        if self.policy_engine:
-            context = PolicyContext(
-                tenant_id=tenant_context.tenant_id,
-                user_id=tenant_context.user_id,
-                user_role=tenant_context.role,
-                action=action,
-                resource_type="bot" if action in ["query", "test_bot", "provision_bot"] else "kb",
-                resource_id=resource_id
-            )
-            
-            decision = await self.policy_engine.evaluate(context)
-            if not decision.allowed:
-                raise PermissionError(f"Action '{action}' not allowed: {decision.reason}")
+        tenant_id = getattr(tenant_context, "tenant_id", None)
+        if not tenant_id:
+            raise PermissionError(f"Action '{action}' denied: no authenticated principal")
+        # normalize_role is a thin compatibility shim for legacy/OIDC role strings;
+        # it never fails (unknown → developer, the IdP default). All three canonical
+        # roles are entitled to use a bot in their own tenant (query/test/provision);
+        # finer-grained grants live in the IdP and are enforced at the gateway.
+        role = normalize_role(getattr(tenant_context, "role", None))
+        logger.debug(
+            "policy.trust_verified_principal",
+            action=action, tenant_id=tenant_id, role=role,
+        )
     
     async def _get_or_create_session(
         self,

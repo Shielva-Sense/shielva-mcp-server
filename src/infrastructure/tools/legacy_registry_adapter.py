@@ -98,7 +98,13 @@ class LegacyToolRegistryAdapter(ToolCatalogue, ToolExecutor):
         # own check inside execute_tool. We catch its denial and
         # re-raise as the domain error so the use-case layer sees
         # the same exception shape regardless of adapter.
-        if not self._reg._check_permissions(  # noqa: SLF001
+        #
+        # Shielva-internal service callers bypass tenant tool-permission gating
+        # (matches Tool.is_permitted_for + the un-gated /codegen/* endpoints):
+        # internal infra like the integration builder's codegen-guideline RAG
+        # is not tenant feature-use. Identity is gateway-controlled (not forgeable
+        # by a tenant), so this does not widen the tenant-facing surface.
+        if not tenant.is_internal_service and not self._reg._check_permissions(  # noqa: SLF001
             self._reg._tools[str(tool.name)].definition,  # noqa: SLF001
             legacy_tenant,
         ):

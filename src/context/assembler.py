@@ -341,12 +341,17 @@ Response Guidelines:
 
         top_k = 10  # P2: increased from 5
 
-        # P3: KB routing — narrow to most relevant KBs when multiple are configured
+        # P3: KB routing — narrow to most relevant KBs when multiple are configured.
+        # FIX #5: embed the query ONCE here and reuse the vector for vector
+        # search, instead of embedding it in both the router and the retriever.
         effective_kb_ids = kb_ids
+        query_embedding: Optional[List[float]] = None
         if self.kb_router and len(kb_ids) > 1:
             if kb_configs and isinstance(kb_configs[0], dict):
                 try:
-                    effective_kb_ids = await self.kb_router.route(query, kb_configs)
+                    effective_kb_ids, query_embedding = await self.kb_router.route_with_embedding(
+                        query, kb_configs
+                    )
                     logger.info(
                         "KB routing applied",
                         original_count=len(kb_ids),
@@ -356,6 +361,7 @@ Response Guidelines:
                 except Exception as route_err:
                     logger.warning("KB routing failed, using all KBs", error=str(route_err))
                     effective_kb_ids = kb_ids
+                    query_embedding = None
 
         if not self.rag_client:
             return []
@@ -377,7 +383,8 @@ Response Guidelines:
                 tenant_id=tenant_context.tenant_id,
                 kb_ids=effective_kb_ids,
                 top_k=top_k,
-                rerank=True
+                rerank=True,
+                query_embedding=query_embedding,  # FIX #5: reuse the routed embedding
             )
 
             # P2: Score threshold — drop chunks scoring < 30% of top result's score

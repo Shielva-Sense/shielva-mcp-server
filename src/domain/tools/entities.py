@@ -26,7 +26,15 @@ class Tool:
     def is_permitted_for(self, tenant: TenantContext) -> bool:
         """A tool is permitted when the calling tenant has every
         ``required_permissions`` entry. Empty permissions = public
-        to every authenticated tenant."""
+        to every authenticated tenant.
+
+        Shielva-internal service callers (``tenant.is_internal_service``) bypass
+        the permission gate: internal infra (e.g. the integration builder's
+        codegen-guideline RAG) is not tenant feature-use, matching the
+        un-gated ``/codegen/*`` internal endpoints. The identity is gateway-
+        controlled, so a tenant cannot forge it."""
+        if tenant.is_internal_service:
+            return True
         if not self.required_permissions:
             return True
         return all(tenant.has_permission(p) for p in self.required_permissions)

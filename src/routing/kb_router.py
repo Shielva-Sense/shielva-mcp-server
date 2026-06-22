@@ -10,8 +10,9 @@ Falls back to all KBs if routing fails or only 1 KB is configured.
 """
 from __future__ import annotations
 
+import hashlib
 import math
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional, Tuple
 
 import structlog
 
@@ -43,8 +44,27 @@ class KBRouter:
     def __init__(self, embedding_client, top_kbs: int = 2):
         self.embedding_client = embedding_client
         self.top_kbs = top_kbs
+        # In-process cache of KB-descriptor embeddings. KB names/descriptions
+        # never change between turns, so re-embedding them every turn is pure
+        # waste. Keyed by (kb_id, sha256(descriptor)) so a renamed/edited KB
+        # naturally re-embeds while a stable one is reused for the process'
+        # lifetime. Embedding vectors are not secrets and are tenant-agnostic
+        # at the descriptor level (the kb_id namespaces them).
+        self._descriptor_cache: Dict[Tuple[str, str], List[float]] = {}
 
-    async def route(self, query: str, kb_configs: List[Dict[str, Any]]) -> List[str]:
+    @staticmethod
+    def _descriptor_for(kb: Dict[str, Any]) -> str:
+        """Build the short text descriptor used to embed a KB."""
+        name = kb.get("name", "")
+        desc = kb.get("description", "")
+        return f"{name}. {desc}".strip(". ") or name or kb.get("id", "")
+
+    async def route(
+        self,
+        query: str,
+        kb_configs: List[Dict[str, Any]],
+        query_embedding: Optional[List[float]] = None,
+    ) -> List[str]:
         """
         Return the IDs of the top-N KBs most relevant to `query`.
 
@@ -52,43 +72,80 @@ class KBRouter:
             query: The user's query text
             kb_configs: List of KB config dicts, each with at least an "id" key.
                         "name" and "description" fields improve routing accuracy.
+            query_embedding: Optional precomputed embedding of `query`. When
+                        provided (FIX #5 — embed-once-per-turn), the router
+                        reuses it instead of re-embedding the query, and only
+                        embeds the KB descriptors that aren't already cached.
+                        Falls back to embedding the query itself when omitted,
+                        so existing callers keep working unchanged.
 
         Returns:
             List of KB IDs (at most self.top_kbs entries, at least 1).
         """
+        kb_ids, _ = await self.route_with_embedding(query, kb_configs, query_embedding)
+        return kb_ids
+
+    async def route_with_embedding(
+        self,
+        query: str,
+        kb_configs: List[Dict[str, Any]],
+        query_embedding: Optional[List[float]] = None,
+    ) -> Tuple[List[str], Optional[List[float]]]:
+        """Like :meth:`route` but also returns the query embedding that was
+        used (computed here when not supplied). Lets the caller reuse the one
+        vector for downstream vector search (FIX #5)."""
+        all_ids = [kb["id"] for kb in kb_configs if "id" in kb]
+
         if len(kb_configs) <= 1:
-            return [kb["id"] for kb in kb_configs if "id" in kb]
+            return all_ids, query_embedding
 
-        # Build a short text descriptor for each KB
-        descriptors = []
-        for kb in kb_configs:
-            name = kb.get("name", "")
-            desc = kb.get("description", "")
-            descriptors.append(f"{name}. {desc}".strip(". ") or name or kb.get("id", ""))
+        # Resolve the descriptors, splitting into cached vs. needs-embedding.
+        descriptors = [self._descriptor_for(kb) for kb in kb_configs]
+        cache_keys: List[Tuple[str, str]] = [
+            (kb.get("id", ""), hashlib.sha256(d.encode()).hexdigest())
+            for kb, d in zip(kb_configs, descriptors)
+        ]
+        missing_idx = [
+            i for i, key in enumerate(cache_keys) if key not in self._descriptor_cache
+        ]
 
-        # Embed query + all descriptors in one batched call.
-        # EmbeddingClient exposes `embed()` (not `embed_batch()`); this
-        # call has been silently raising AttributeError → falling into
-        # the except below → router degraded to "return all KBs" so
-        # routing was effectively disabled.
-        texts_to_embed = [query] + descriptors
+        # Build the single batched embed call: the query (only if we don't
+        # already have it) + any uncached descriptors.
+        texts_to_embed: List[str] = []
+        need_query = query_embedding is None
+        if need_query:
+            texts_to_embed.append(query)
+        texts_to_embed.extend(descriptors[i] for i in missing_idx)
+
         try:
-            embeddings = await self.embedding_client.embed(texts_to_embed)
+            embeddings = await self.embedding_client.embed(texts_to_embed) if texts_to_embed else []
         except Exception as exc:
             logger.warning("KBRouter.embed failed, using all KBs", error=str(exc))
-            return [kb["id"] for kb in kb_configs if "id" in kb]
+            return all_ids, query_embedding
 
-        if not embeddings or len(embeddings) != len(texts_to_embed):
+        if len(embeddings) != len(texts_to_embed):
             logger.warning("KBRouter got unexpected embedding count, using all KBs")
-            return [kb["id"] for kb in kb_configs if "id" in kb]
+            return all_ids, query_embedding
 
-        query_vec = embeddings[0]
-        kb_vecs = embeddings[1:]
+        cursor = 0
+        if need_query:
+            query_embedding = embeddings[cursor]
+            cursor += 1
+        for i in missing_idx:
+            self._descriptor_cache[cache_keys[i]] = embeddings[cursor]
+            cursor += 1
 
-        # Score each KB
+        if not query_embedding:
+            logger.warning("KBRouter has no query embedding, using all KBs")
+            return all_ids, query_embedding
+
+        # Score each KB against the (now fully-cached) descriptor vectors.
         scored = []
-        for kb, vec in zip(kb_configs, kb_vecs):
-            score = _cosine(query_vec, vec)
+        for kb, key in zip(kb_configs, cache_keys):
+            vec = self._descriptor_cache.get(key)
+            if vec is None:
+                continue
+            score = _cosine(query_embedding, vec)
             scored.append((score, kb.get("id", "")))
 
         scored.sort(key=lambda x: x[0], reverse=True)
@@ -101,4 +158,4 @@ class KBRouter:
             selected=top,
         )
 
-        return top if top else [kb["id"] for kb in kb_configs if "id" in kb]
+        return (top if top else all_ids), query_embedding

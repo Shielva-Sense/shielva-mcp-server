@@ -39,7 +39,12 @@ logger = structlog.get_logger(__name__)
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 _HERE            = Path(__file__).resolve()
-COLLECTOR_DIR    = _HERE.parent.parent.parent.parent / "security-fix-collector"
+# _HERE = .../mcp-server/src/interface/http/ingest_router.py
+# parents[0]=http  [1]=interface  [2]=src  [3]=mcp-server  [4]=shielva-mcp repo root.
+# The collector lives at the repo root, NOT under mcp-server — earlier this used
+# four .parents (→ mcp-server/security-fix-collector, which does not exist) and
+# every ingest returned 503 "Collector script not found".
+COLLECTOR_DIR    = _HERE.parents[4] / "security-fix-collector"
 COLLECTOR_SCRIPT = COLLECTOR_DIR / "collector.py"
 SCHEDULE_CONFIG_PATH = _HERE.parent.parent.parent / "schedule_config.json"
 _COLLECTOR_ENV   = COLLECTOR_DIR / ".env"

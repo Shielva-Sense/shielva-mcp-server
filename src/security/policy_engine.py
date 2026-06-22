@@ -10,6 +10,60 @@ import structlog
 logger = structlog.get_logger(__name__)
 
 
+# ── Canonical role normalization (single source of truth) ───────────────────────
+# The IdP (shielva-identity) defines exactly THREE canonical roles. This MUST stay in
+# lockstep with shielva-identity/app/core/roles.py (UserRole + LEGACY_ROLE_MAP +
+# normalise_role):
+#
+#   platform_owner — internal Shielva founder; all-access, plan-exempt.
+#   tenant_admin   — tenant administrator; full business-app access.
+#   developer      — standard end-user; core apps (arc/acp/tms), no destructive ops.
+#
+# Legacy/OIDC role strings normalise to one of the three; anything unknown → developer
+# (the IdP default — never a hard deny, so a deployed bot stays chattable). External
+# bot end-users carry no platform role and therefore also resolve to developer, which
+# holds bot:query. Previously the fallback used invented display-name roles and omitted
+# platform_owner entirely → legitimate principals were denied with "Unknown role".
+_CANONICAL_ROLES = ("platform_owner", "tenant_admin", "developer")
+
+_LEGACY_ROLE_MAP: Dict[str, str] = {
+    "super_admin": "platform_owner",
+    "superadmin":  "platform_owner",
+    "admin":       "tenant_admin",
+    "bot_manager": "developer",
+    "analyst":     "developer",
+    "viewer":      "developer",
+    "partner":     "developer",
+}
+
+# Most-privileged wins when a principal carries multiple roles.
+_ROLE_PRIORITY = ("platform_owner", "tenant_admin", "developer")
+_DEFAULT_POLICY_ROLE = "developer"
+
+
+def normalize_role(raw_role: Optional[str]) -> str:
+    """Map a principal's raw role string to one of the three canonical roles.
+
+    Mirrors shielva-identity's ``normalise_role``: case-insensitive, legacy-string aware,
+    and multi-role aware (comma-joined principals resolve to the most-privileged). Unknown
+    roles default to ``developer``.
+    """
+    if not raw_role:
+        return _DEFAULT_POLICY_ROLE
+    matched: List[str] = []
+    for tok in str(raw_role).replace(";", ",").split(","):
+        r = tok.strip().lower().replace(" ", "_").replace("-", "_")
+        if not r:
+            continue
+        r = _LEGACY_ROLE_MAP.get(r, r)
+        if r in _CANONICAL_ROLES:
+            matched.append(r)
+    for role in _ROLE_PRIORITY:  # most-privileged wins
+        if role in matched:
+            return role
+    return _DEFAULT_POLICY_ROLE
+
+
 @dataclass
 class PolicyDecision:
     """Result of a policy evaluation"""
@@ -62,7 +116,10 @@ class OPAPolicyEngine:
         # Fallback policies for when OPA is unavailable
         self._fallback_enabled = True
         self._role_permissions = self._default_role_permissions()
-        
+        # When OPA isn't deployed, every request would otherwise log a warning. Warn
+        # once, then stay quiet (debug) so the fallback path doesn't spam prod logs.
+        self._opa_warned = False
+
         logger.info("OPAPolicyEngine initialized", opa_url=opa_url)
     
     async def evaluate(
@@ -78,18 +135,8 @@ class OPAPolicyEngine:
         Returns:
             PolicyDecision with allow/deny result
         """
-        # Normalize role for internal mapping (e.g., demo_user -> Demo User)
-        role_map = {
-            "demo_user": "Demo User",
-            "tenant_admin": "Tenant Admin",
-            "customer_admin": "Tenant Admin",
-            "admin": "Tenant Admin",
-            "bot_manager": "Bot Manager",
-            "analyst": "Analyst",
-            "viewer": "Viewer",
-            "super_admin": "Super Admin"
-        }
-        context.user_role = role_map.get((context.user_role or "").lower(), context.user_role)
+        # Normalize role to a canonical policy role (see normalize_role).
+        context.user_role = normalize_role(context.user_role)
 
         logger.debug(
             "Evaluating policy",
@@ -125,11 +172,17 @@ class OPAPolicyEngine:
             )
             
         except Exception as e:
-            logger.warning("OPA query failed, using fallback", error=str(e))
-            
+            # Warn once (then debug) — when OPA isn't deployed this fires on every
+            # request, and the fallback RBAC is the intended authority in that mode.
+            if not self._opa_warned:
+                logger.warning("OPA unavailable — using fallback RBAC for this and subsequent requests", error=str(e))
+                self._opa_warned = True
+            else:
+                logger.debug("OPA query failed, using fallback", error=str(e))
+
             if self._fallback_enabled:
                 return self._fallback_evaluate(context)
-            
+
             # Fail closed
             return PolicyDecision(
                 allowed=False,
@@ -157,18 +210,8 @@ class OPAPolicyEngine:
         Returns:
             PolicyDecision indicating if quota allows creation
         """
-        # Normalize role
-        role_map = {
-            "demo_user": "Demo User",
-            "tenant_admin": "Tenant Admin",
-            "customer_admin": "Tenant Admin",
-            "admin": "Tenant Admin",
-            "bot_manager": "Bot Manager",
-            "analyst": "Analyst",
-            "viewer": "Viewer",
-            "super_admin": "Super Admin"
-        }
-        user_role = role_map.get(user_role.lower(), user_role)
+        # Normalize role to a canonical policy role (see normalize_role).
+        user_role = normalize_role(user_role)
 
         try:
             input_data = {
@@ -245,18 +288,8 @@ class OPAPolicyEngine:
         Returns:
             True if feature is enabled
         """
-        # Normalize role
-        role_map = {
-            "demo_user": "Demo User",
-            "tenant_admin": "Tenant Admin",
-            "customer_admin": "Tenant Admin",
-            "admin": "Tenant Admin",
-            "bot_manager": "Bot Manager",
-            "analyst": "Analyst",
-            "viewer": "Viewer",
-            "super_admin": "Super Admin"
-        }
-        user_role = role_map.get(user_role.lower(), user_role)
+        # Normalize role to a canonical policy role (see normalize_role).
+        user_role = normalize_role(user_role)
 
         try:
             input_data = {
@@ -295,72 +328,50 @@ class OPAPolicyEngine:
     # ===== Fallback Policies =====
     
     def _default_role_permissions(self) -> Dict[str, Dict[str, List[str]]]:
-        """Default role-based permissions (Shielva Platform Roles)"""
+        """Default role-based permissions, keyed by the three canonical IdP roles
+        (see normalize_role / shielva-identity roles.py). Bot resource actions include
+        query/test_bot/provision_bot (the chat + test surface) — all three roles can
+        chat/test a bot; only destructive ops differ."""
         return {
-            "Super Admin": {
-                "bot": ["create", "read", "update", "delete", "deploy", "query"],
+            "platform_owner": {
+                "bot": ["create", "read", "update", "delete", "deploy", "query", "test_bot", "provision_bot"],
                 "kb": ["create", "read", "update", "delete", "provision_kb"],
                 "connector": ["create", "read", "update", "delete", "sync"],
                 "user": ["create", "read", "update", "delete", "invite"],
                 "settings": ["read", "update"]
             },
-            "Tenant Admin": {
-                "bot": ["create", "read", "update", "delete", "deploy", "query"],
+            "tenant_admin": {
+                "bot": ["create", "read", "update", "delete", "deploy", "query", "test_bot", "provision_bot"],
                 "kb": ["create", "read", "update", "delete", "provision_kb"],
                 "connector": ["create", "read", "update", "delete", "sync"],
                 "user": ["invite", "read"],
                 "settings": ["read", "update"]
             },
-            "Bot Manager": {
-                "bot": ["create", "read", "update", "deploy", "query"],
+            "developer": {
+                # Core apps: create/manage and TEST/chat bots, but no destructive ops
+                # (no delete) — mirrors shielva-identity _DEVELOPER_DENY.
+                "bot": ["create", "read", "update", "deploy", "query", "test_bot", "provision_bot"],
                 "kb": ["create", "read", "update", "provision_kb"],
-                "connector": ["create", "read", "sync"],
-                "user": ["read"],
-                "settings": ["read"]
-            },
-            "Analyst": {
-                "bot": ["read", "query"],
-                "kb": ["read"],
                 "connector": ["read"],
-                "user": ["read"],
-                "settings": ["read"]
-            },
-            "Viewer": {
-                "bot": ["read", "query"],
-                "kb": ["read"],
-                "connector": ["read"],
-                "user": ["read"],
-                "settings": ["read"]
-            },
-            "Demo User": {
-                "bot": ["read", "query", "deploy"],  # Can test existing bots
-                "kb": ["read", "provision_kb"],
-                "connector": [],
                 "user": ["read"],
                 "settings": ["read"]
             }
         }
-    
+
     def _default_quotas(self) -> Dict[str, Dict[str, int]]:
-        """Default resource quotas per role (Shielva Platform Quotas)"""
+        """Default resource quotas per canonical role (gates CREATE only; query is unmetered)."""
         return {
-            "Super Admin": {"bot": 999, "kb": 999, "connector": 999},
-            "Tenant Admin": {"bot": 50, "kb": 50, "connector": 25},
-            "Bot Manager": {"bot": 10, "kb": 10, "connector": 5},
-            "Analyst": {"bot": 0, "kb": 0, "connector": 0},
-            "Viewer": {"bot": 0, "kb": 0, "connector": 0},
-            "Demo User": {"bot": 1, "kb": 5, "connector": 0}
+            "platform_owner": {"bot": 999, "kb": 999, "connector": 999},
+            "tenant_admin": {"bot": 999, "kb": 999, "connector": 999},
+            "developer": {"bot": 50, "kb": 50, "connector": 10}
         }
-    
+
     def _default_features(self) -> Dict[str, List[str]]:
-        """Default features per role (Shielva Platform Features)"""
+        """Default features per canonical role."""
         return {
-            "Super Admin": ["all"],
-            "Tenant Admin": ["bot_deploy", "kb_advanced", "connector_all", "analytics_advanced"],
-            "Bot Manager": ["bot_create", "kb_basic", "connector_limited"],
-            "Analyst": ["analytics_basic"],
-            "Viewer": ["read_only"],
-            "Demo User": ["demo_access"]
+            "platform_owner": ["all"],
+            "tenant_admin": ["all"],
+            "developer": ["bot_create", "kb_basic", "chat"]
         }
     
     def _fallback_evaluate(self, context: PolicyContext) -> PolicyDecision:
