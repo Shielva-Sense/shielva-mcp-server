@@ -59,7 +59,15 @@ WORKDIR /build
 # Copy requirements first so the layer cache survives source-only
 # changes — the expensive resolve only re-runs when deps change.
 COPY requirements.txt ./requirements.txt
-RUN pip install -r requirements.txt
+# shielva-common resolves from the private Shielva-AI/shielva-platform-core repo.
+# .netrc written→used→deleted in one RUN so the token never persists in a layer
+# (build with --secret id=github_token).
+RUN --mount=type=secret,id=github_token \
+    printf 'machine github.com\n  login x-access-token\n  password %s\n' \
+      "$(cat /run/secrets/github_token)" > /root/.netrc \
+    && chmod 600 /root/.netrc \
+    && pip install -r requirements.txt \
+    && rm -f /root/.netrc
 
 # Sanity gate — fail the build if core imports cannot resolve.
 RUN python -c "import fastapi, uvicorn, structlog, httpx; print('builder ok')"
