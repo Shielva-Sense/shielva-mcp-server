@@ -2,7 +2,7 @@
 # correlation) plus shielva_common helpers. Pulled from a GitHub Release
 # of Shielva-AI/shielva-platform-core. Authentication via ~/.netrc
 # (or BuildKit secret in Docker — see service Dockerfile).
-shielva-common @ git+https://github.com/Shielva-AI/shielva-platform-core@shielva-common-v0.2.0#subdirectory=shielva-common
+shielva-common @ git+https://github.com/Shielva-AI/shielva-platform-core@shielva-common-v1.2.1#subdirectory=shielva-common
 
 # Core
 fastapi>=0.109.0
@@ -50,3 +50,15 @@ orjson>=3.9.0
 pytest>=7.4.0
 pytest-asyncio>=0.23.0
 prometheus_client>=0.20.0
+
+# rag-engine deps — src/rag_engine is a symlink to the sibling rag-engine/
+# project (imported at main.py:103 → vector_store/HybridRetriever). The image
+# build dereferences the symlink (rsync -L); these are rag-engine's own deps
+# (rag-engine/requirements.txt) so they install in the container as they do in
+# the local venv. Without them mcp crashes at startup (ModuleNotFoundError).
+vecs>=0.4.0                 # Supabase pgvector client (SupabaseVectorStore)
+qdrant-client>=1.7.0        # vector store
+numpy>=1.24.0
+rank-bm25>=0.2.2            # hybrid BM25 retrieval
+sentence-transformers>=2.2.0  # CrossEncoder reranking
+cohere>=4.0.0              # Cohere reranking
