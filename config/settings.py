@@ -54,17 +54,25 @@ class MCPSettings(SealedSettings):
         description="Postgres connection URI for knowledge-manager persistence",
     )
 
-    # ── Supabase Vector DB (SECRET) ──────────────────────────────────────
+    # ── pgvector (in-cluster Postgres) Vector DB (SECRET) ────────────────
+    # NOTE: this is plain in-cluster Postgres + pgvector, NOT Supabase. The
+    # legacy "supabase_*" naming was misleading and has been renamed. The
+    # connection-string env is now MCP_VECTOR_DB_URL; SUPABASE_DB_URL is kept
+    # as a backward-compat alias until the deployment env is migrated.
     supabase_url: Optional[str] = None
     supabase_key: SecretStr = sealed_field(
         SecretStr(""),
         env="SUPABASE_KEY",
         file_env="SUPABASE_KEY_FILE",
     )
-    supabase_db_url: SecretStr = sealed_field(
+    # Canonical env is MCP_VECTOR_DB_URL. The legacy SUPABASE_DB_URL env is
+    # bridged into this canonical name (incl. its sealed/decrypted provenance)
+    # by `_bridge_legacy_vector_db_env()` below, which runs before settings
+    # load — so the field itself only ever reads the canonical key.
+    mcp_vector_db_url: SecretStr = sealed_field(
         SecretStr(""),
-        env="SUPABASE_DB_URL",
-        file_env="SUPABASE_DB_URL_FILE",
+        env="MCP_VECTOR_DB_URL",
+        file_env="MCP_VECTOR_DB_URL_FILE",
     )
     supabase_collection_prefix: str = "shielva_kb_"
 
@@ -205,6 +213,43 @@ class MCPSettings(SealedSettings):
     security_fix_min_similarity: float = 0.45
 
 
+def _bridge_legacy_vector_db_env() -> None:
+    """Backward-compat alias: accept the legacy ``SUPABASE_DB_URL`` env under
+    the renamed canonical ``MCP_VECTOR_DB_URL``.
+
+    The vector DB is plain in-cluster Postgres + pgvector (never Supabase); the
+    env var was renamed. The live deployment still sets ``SUPABASE_DB_URL`` (as
+    a ``vault:v1:`` sealed value decrypted in-place by ``envelope.bootstrap()``
+    before this runs). To avoid breaking that deployment mid-migration:
+
+      * If only ``SUPABASE_DB_URL`` is set, copy its (already-decrypted) value
+        into ``MCP_VECTOR_DB_URL`` and carry over its sealed/decrypted
+        provenance so the SealedSettings check passes.
+      * If ``MCP_VECTOR_DB_URL`` is already set (post-migration), it wins and
+        the legacy key is ignored.
+
+    Same treatment for the ``*_FILE`` file-mount pointer.
+    """
+    import os
+
+    legacy, canonical = "SUPABASE_DB_URL", "MCP_VECTOR_DB_URL"
+    for suffix in ("", "_FILE"):
+        leg, can = legacy + suffix, canonical + suffix
+        if not os.environ.get(can) and os.environ.get(leg):
+            os.environ[can] = os.environ[leg]
+            # Carry the sealed-provenance flag so the SealedSettings check
+            # treats the canonical key as decrypted just like the legacy one.
+            try:
+                from shielva_common.config.sealed import (
+                    _was_decrypted,
+                    _record_decrypted,
+                )
+                if _was_decrypted(leg):
+                    _record_decrypted([can])
+            except Exception:  # pragma: no cover - provenance bridge is best-effort
+                pass
+
+
 @lru_cache()
 def get_settings() -> MCPSettings:
     """Get cached settings instance.
@@ -214,4 +259,5 @@ def get_settings() -> MCPSettings:
     should run shielva_common.envelope.bootstrap() first (or set
     SHIELVA_SEALED_PERMISSIVE=1 for dev migrations).
     """
+    _bridge_legacy_vector_db_env()
     return MCPSettings()

@@ -1,7 +1,7 @@
-"""Adapter mapping the existing Supabase vector store onto the
+"""Adapter mapping the existing pgvector vector store onto the
 :class:`domain.knowledge.VectorStore` port.
 
-The legacy ``SupabaseVectorStore`` carries a different vocabulary
+The legacy ``PgVectorStore`` carries a different vocabulary
 (``collection_name = ns_{tenant}_{kb}``, dict-based ``upsert``).
 This adapter does the value-object ↔ dict translation so domain
 code stays clean.
@@ -21,9 +21,9 @@ from src.domain.shared.tenant import TenantContext
 logger = structlog.get_logger(__name__)
 
 
-class SupabaseVectorStoreAdapter(VectorStore):
+class PgVectorStoreAdapter(VectorStore):
     def __init__(self, legacy_store) -> None:
-        # Existing ``src.rag_engine.vectorstore.supabase_store.SupabaseVectorStore``
+        # Existing ``src.rag_engine.vectorstore.supabase_store.PgVectorStore``
         # instance from main.py lifespan.
         self._store = legacy_store
 
@@ -134,3 +134,8 @@ def _to_retrieved(rows, kb_id: KBId) -> List[RetrievedChunk]:
         score = float(row.get("score") or row.get("similarity") or 0.0)
         out.append(RetrievedChunk(chunk=chunk, score=score))
     return out
+
+
+# Backward-compat alias: renamed SupabaseVectorStoreAdapter -> PgVectorStoreAdapter
+# (the underlying store is plain pgvector, not Supabase).
+SupabaseVectorStoreAdapter = PgVectorStoreAdapter
