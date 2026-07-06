@@ -46,7 +46,7 @@ class KBRepository(ABC):
 
 class VectorStore(ABC):
     """Backs similarity search. The infrastructure adapter knows
-    where the vectors live (Supabase Vector, pgvector, Pinecone…)."""
+    where the vectors live (pgvector, Pinecone…)."""
 
     @abstractmethod
     async def upsert(

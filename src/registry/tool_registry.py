@@ -367,7 +367,7 @@ def _build_security_fix_tool():
     Lazily initialize the SecurityFixTool using existing MCP settings.
     All API keys (Gemini, OpenAI) come from the MCP server's own .env —
     no separate key configuration needed.
-    Returns None if security_fix_rag_enabled is False or Supabase is unavailable.
+    Returns None if security_fix_rag_enabled is False or the vector DB is unavailable.
     """
     try:
         from config.settings import get_settings
@@ -375,8 +375,8 @@ def _build_security_fix_tool():
 
         if not s.security_fix_rag_enabled:
             return None
-        if not s.supabase_db_url:
-            logger.warning("security_fix_rag_disabled", reason="SUPABASE_DB_URL not set in MCP .env")
+        if not s.mcp_vector_db_url:
+            logger.warning("security_fix_rag_disabled", reason="MCP_VECTOR_DB_URL not set in MCP .env")
             return None
 
         # Add tools/ to path so the import works without packaging
@@ -403,7 +403,10 @@ def _build_security_fix_tool():
             return None
 
         config = SecurityFixToolConfig(
-            supabase_db_url=s.supabase_db_url,
+            # NOTE: ``supabase_db_url`` is the external security-fix-tool's own
+            # config field name (not in this service's scope); only the value
+            # source — our renamed settings field — changes here.
+            supabase_db_url=s.mcp_vector_db_url,
             gemini_api_key=api_key if provider == "gemini" else "",
             embedding_provider=provider,
             embedding_dimensions=dims,

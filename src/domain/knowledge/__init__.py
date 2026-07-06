@@ -7,7 +7,7 @@ indexed by a VectorStore + retrieved as Sources for the LLM.
 Three ports because three different infrastructure stacks live
 behind them:
     * :class:`KBRepository`     — Mongo / Postgres (KB metadata).
-    * :class:`VectorStore`      — Supabase Vector / Pinecone / pgvector
+    * :class:`VectorStore`      — pgvector / Pinecone
                                   (the actual vectors + similarity search).
     * :class:`EmbeddingClient`  — Gemini / OpenAI / Cohere / local model.
 

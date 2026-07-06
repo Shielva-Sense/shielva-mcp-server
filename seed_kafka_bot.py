@@ -418,11 +418,11 @@ async def main():
         KNOWLEDGE_CHUNKS, settings.gemini_api_key.get_secret_value(),
     )
 
-    # 2. Upsert to Supabase
-    print("\nStep 2 — Upserting into Supabase pgvector...")
+    # 2. Upsert to pgvector
+    print("\nStep 2 — Upserting into pgvector...")
     await upsert_to_supabase(
         embedded,
-        settings.supabase_db_url.get_secret_value(),
+        settings.mcp_vector_db_url.get_secret_value(),
         tenant_id,
         kb_id,
     )

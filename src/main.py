@@ -99,10 +99,10 @@ async def lifespan(app: FastAPI):
         policy_path="/v1/data/shielva"
     )
     
-    # RAG Engine - Supabase Vector
-    from src.rag_engine.vectorstore import SupabaseVectorStore
+    # RAG Engine - pgvector (in-cluster Postgres)
+    from src.rag_engine.vectorstore import PgVectorStore
     from src.rag_engine.retriever import HybridRetriever
-    from src.rag_engine.vectorstore.supabase_store import SupabaseVectorStore
+    from src.rag_engine.vectorstore.supabase_store import PgVectorStore
     
     # We need to make sure src.rag_engine imports resolve correctly.
     # Assuming 'rag-engine/src' is in PYTHONPATH or symlinked?
@@ -124,14 +124,14 @@ async def lifespan(app: FastAPI):
     mongo_client = AsyncIOMotorClient(_url_str, **_tls)
     
     # Initialize Vector Store
-    # Use SUPABASE_DB_URL if available, else construct/warn
-    _raw_db_url = settings.supabase_db_url
+    # Use MCP_VECTOR_DB_URL (legacy SUPABASE_DB_URL alias) if available, else warn
+    _raw_db_url = settings.mcp_vector_db_url
     # Unwrap Pydantic SecretStr — 'in' / split() / startswith() fail on SecretStr directly
     db_url = _raw_db_url.get_secret_value() if hasattr(_raw_db_url, "get_secret_value") else (_raw_db_url or "")
     if not db_url and settings.supabase_url:
-        # Warn user or try to construct? 
+        # Warn user or try to construct?
         # For now we rely on db_url being set in server.sh
-        logger.warning("SUPABASE_DB_URL not set. Vector store may fail to connect.")
+        logger.warning("MCP_VECTOR_DB_URL not set. Vector store may fail to connect.")
         db_url = "postgresql://postgres:postgres@localhost:54322/postgres" # Fallback/Invalid
     
     # DEBUG: Print DB URL (mask password)
@@ -142,9 +142,9 @@ async def lifespan(app: FastAPI):
             # Mask password
             scheme_user = parts[0].split(":")[0]
             masked_url = f"{scheme_user}:****@{parts[1]}"
-    logger.info("Initializing SupabaseVectorStore", db_url=masked_url)
+    logger.info("Initializing PgVectorStore", db_url=masked_url)
 
-    vector_store = SupabaseVectorStore(
+    vector_store = PgVectorStore(
         db_url=db_url,
         collection_prefix=settings.supabase_collection_prefix,
         embedding_dim=settings.embedding_dimensions

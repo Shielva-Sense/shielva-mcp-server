@@ -60,10 +60,10 @@ def wire_use_cases(
     from src.infrastructure.retrieval  import (
         LegacyEmbeddingClientAdapter,
         LegacyHybridRetrieverAdapter,
-        SupabaseVectorStoreAdapter,
+        PgVectorStoreAdapter,
     )
     embedding_client_port = LegacyEmbeddingClientAdapter(embedding_client)
-    vector_store_port     = SupabaseVectorStoreAdapter(vector_store)
+    vector_store_port     = PgVectorStoreAdapter(vector_store)
     retriever_port        = LegacyHybridRetrieverAdapter(rag_client)
     kb_repository_port    = LegacyKBRepositoryAdapter(kb_registry)
     llm_provider_port     = LiteLLMProviderAdapter(llm_router)
