@@ -17,10 +17,11 @@ call ``app_state.tool_registry`` etc. directly. The dispatcher keeps
 that coupling localised — the application/chat layer is already
 clean, and the rest will follow context-by-context.
 """
+
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, Optional
+from typing import Any
 
 import structlog
 
@@ -30,23 +31,42 @@ from src.domain.chat.errors import SessionNotFoundError, SessionStateError
 from src.domain.chat.value_objects import ClientInfo, SessionId
 from src.domain.shared.tenant import TenantContext
 from src.domain.tools.errors import (
-    ToolNotFoundError, ToolPermissionDeniedError,
+    ToolNotFoundError,
+    ToolPermissionDeniedError,
 )
 from src.domain.tools.value_objects import ToolImage as DomainToolImage
 from src.domain.tools.value_objects import ToolText as DomainToolText
 
 from .errors import (
-    FORBIDDEN, INTERNAL_ERROR, INVALID_PARAMS, INVALID_REQUEST,
-    JsonRpcException, METHOD_NOT_FOUND, RESOURCE_NOT_FOUND, TOOL_NOT_FOUND,
+    FORBIDDEN,
+    INTERNAL_ERROR,
+    INVALID_PARAMS,
+    INVALID_REQUEST,
+    METHOD_NOT_FOUND,
+    RESOURCE_NOT_FOUND,
+    TOOL_NOT_FOUND,
+    JsonRpcException,
 )
 from .types import (
-    InitializeParams, InitializeResult, Implementation,
+    Implementation,
+    InitializeParams,
+    InitializeResult,
     LoggingSetLevelParams,
-    Prompt, PromptArgument, PromptGetResult, PromptListResult, PromptMessage,
-    Resource, ResourceContents, ResourceListResult, ResourceReadResult,
+    Prompt,
+    PromptArgument,
+    PromptGetResult,
+    PromptListResult,
+    PromptMessage,
+    Resource,
+    ResourceContents,
+    ResourceListResult,
+    ResourceReadResult,
     ServerCapabilities,
-    ToolCallParams, ToolCallResult, ToolContentText,
-    ToolListItem, ToolListResult,
+    ToolCallParams,
+    ToolCallResult,
+    ToolContentText,
+    ToolListItem,
+    ToolListResult,
 )
 
 logger = structlog.get_logger(__name__)
@@ -55,7 +75,7 @@ logger = structlog.get_logger(__name__)
 # Spec version we implement (2024-11-05 stable; Streamable HTTP from
 # 2025-03-26 is wire-compatible).
 PROTOCOL_VERSION = "2024-11-05"
-SERVER_NAME      = "shielva-mcp"
+SERVER_NAME = "shielva-mcp"
 
 
 class MCPDispatcher:
@@ -64,26 +84,26 @@ class MCPDispatcher:
     def __init__(
         self,
         *,
-        chat_service:    ChatApplicationService,
-        server_version:  str,
+        chat_service: ChatApplicationService,
+        server_version: str,
     ) -> None:
         self._chat = chat_service
         self._server_version = server_version
 
         self._requests = {
-            "initialize":         self._handle_initialize,
-            "ping":               self._handle_ping,
-            "tools/list":         self._handle_tools_list,
-            "tools/call":         self._handle_tools_call,
-            "resources/list":     self._handle_resources_list,
-            "resources/read":     self._handle_resources_read,
-            "prompts/list":       self._handle_prompts_list,
-            "prompts/get":        self._handle_prompts_get,
-            "logging/setLevel":   self._handle_logging_set_level,
+            "initialize": self._handle_initialize,
+            "ping": self._handle_ping,
+            "tools/list": self._handle_tools_list,
+            "tools/call": self._handle_tools_call,
+            "resources/list": self._handle_resources_list,
+            "resources/read": self._handle_resources_read,
+            "prompts/list": self._handle_prompts_list,
+            "prompts/get": self._handle_prompts_get,
+            "logging/setLevel": self._handle_logging_set_level,
         }
         self._notifications = {
             "notifications/initialized": self._handle_initialized,
-            "notifications/cancelled":   self._handle_cancelled,
+            "notifications/cancelled": self._handle_cancelled,
         }
 
     # ── entry point ────────────────────────────────────────────────
@@ -91,12 +111,12 @@ class MCPDispatcher:
     async def dispatch_request(
         self,
         *,
-        method:     str,
-        params:     Optional[Dict[str, Any]],
-        tenant:     TenantContext,
-        session_id: Optional[str],
-        app_state:  Any,
-    ) -> tuple[Dict[str, Any], Optional[str]]:
+        method: str,
+        params: dict[str, Any] | None,
+        tenant: TenantContext,
+        session_id: str | None,
+        app_state: Any,
+    ) -> tuple[dict[str, Any], str | None]:
         """Handle a JSON-RPC request that expects a response.
 
         Returns ``(result, session_id_for_response_header)``. Raises
@@ -110,16 +130,14 @@ class MCPDispatcher:
         # Spec: every non-initialize, non-ping request requires a
         # session id (transport already enforced HTTP-level missing-
         # header → 400). State-machine check happens per-method.
-        sid: Optional[SessionId] = SessionId(session_id) if session_id else None
+        sid: SessionId | None = SessionId(session_id) if session_id else None
 
         if method == "initialize":
-            result, new_sid = await handler(tenant=tenant, params=params or {},
-                                            app_state=app_state)
+            result, new_sid = await handler(tenant=tenant, params=params or {}, app_state=app_state)
             return result, str(new_sid) if new_sid else None
 
         if method == "ping":
-            result = await handler(tenant=tenant, session_id=sid,
-                                   params=params or {}, app_state=app_state)
+            result = await handler(tenant=tenant, session_id=sid, params=params or {}, app_state=app_state)
             return result, session_id
 
         if sid is None:
@@ -129,20 +147,21 @@ class MCPDispatcher:
             )
         # Enforce state machine for non-initialize methods.
         await self._chat.assert_method_allowed(
-            session_id=sid, tenant=tenant, method=method,
+            session_id=sid,
+            tenant=tenant,
+            method=method,
         )
-        result = await handler(tenant=tenant, session_id=sid,
-                               params=params or {}, app_state=app_state)
+        result = await handler(tenant=tenant, session_id=sid, params=params or {}, app_state=app_state)
         return result, session_id
 
     async def dispatch_notification(
         self,
         *,
-        method:     str,
-        params:     Optional[Dict[str, Any]],
-        tenant:     TenantContext,
-        session_id: Optional[str],
-        app_state:  Any,
+        method: str,
+        params: dict[str, Any] | None,
+        tenant: TenantContext,
+        session_id: str | None,
+        app_state: Any,
     ) -> None:
         """Handle a notification (no id, no response).
 
@@ -153,21 +172,21 @@ class MCPDispatcher:
             logger.debug("mcp.unknown_notification", method=method)
             return
         sid = SessionId(session_id) if session_id else None
-        await handler(tenant=tenant, session_id=sid, params=params or {},
-                      app_state=app_state)
+        await handler(tenant=tenant, session_id=sid, params=params or {}, app_state=app_state)
 
     # ── request handlers ───────────────────────────────────────────
 
-    async def _handle_initialize(self, *, tenant: TenantContext,
-                                 params: Dict[str, Any], app_state: Any
-                                 ) -> tuple[Dict[str, Any], SessionId]:
+    async def _handle_initialize(
+        self, *, tenant: TenantContext, params: dict[str, Any], app_state: Any
+    ) -> tuple[dict[str, Any], SessionId]:
         try:
             ip = InitializeParams.model_validate(params)
         except Exception as e:
             raise JsonRpcException(INVALID_PARAMS, f"Invalid initialize: {e}")
 
         client_info = ClientInfo(
-            name=ip.clientInfo.name, version=ip.clientInfo.version,
+            name=ip.clientInfo.name,
+            version=ip.clientInfo.version,
         )
         session = await self._chat.initialize(
             tenant=tenant,
@@ -176,16 +195,16 @@ class MCPDispatcher:
         )
 
         caps = ServerCapabilities(
-            tools     = {"listChanged": False},
-            resources = {"subscribe": False, "listChanged": False},
-            prompts   = {"listChanged": False},
-            logging   = {},
+            tools={"listChanged": False},
+            resources={"subscribe": False, "listChanged": False},
+            prompts={"listChanged": False},
+            logging={},
         )
         result = InitializeResult(
-            protocolVersion = str(session.protocol_version),
-            capabilities    = caps,
-            serverInfo      = Implementation(name=SERVER_NAME, version=self._server_version),
-            instructions    = (
+            protocolVersion=str(session.protocol_version),
+            capabilities=caps,
+            serverInfo=Implementation(name=SERVER_NAME, version=self._server_version),
+            instructions=(
                 "shielva-mcp tenant-scoped RAG/LLM server. Tools, "
                 "resources (knowledge bases), and prompts (bot "
                 "templates) are scoped to the X-Tenant-ID supplied "
@@ -194,23 +213,33 @@ class MCPDispatcher:
         ).model_dump(exclude_none=True)
         return result, session.id
 
-    async def _handle_ping(self, *, tenant: TenantContext,
-                           session_id: Optional[SessionId],
-                           params: Dict[str, Any], app_state: Any
-                           ) -> Dict[str, Any]:
+    async def _handle_ping(
+        self,
+        *,
+        tenant: TenantContext,
+        session_id: SessionId | None,
+        params: dict[str, Any],
+        app_state: Any,
+    ) -> dict[str, Any]:
         await self._chat.ping(session_id=session_id, tenant=tenant)
         return {}
 
-    async def _handle_logging_set_level(self, *, tenant: TenantContext,
-                                        session_id: SessionId,
-                                        params: Dict[str, Any], app_state: Any
-                                        ) -> Dict[str, Any]:
+    async def _handle_logging_set_level(
+        self,
+        *,
+        tenant: TenantContext,
+        session_id: SessionId,
+        params: dict[str, Any],
+        app_state: Any,
+    ) -> dict[str, Any]:
         try:
             p = LoggingSetLevelParams.model_validate(params)
         except Exception as e:
             raise JsonRpcException(INVALID_PARAMS, f"Invalid logging/setLevel: {e}")
         await self._chat.set_log_level(
-            session_id=session_id, tenant=tenant, level=p.level,
+            session_id=session_id,
+            tenant=tenant,
+            level=p.level,
         )
         return {}
 
@@ -231,26 +260,34 @@ class MCPDispatcher:
             )
         return svc
 
-    async def _handle_tools_list(self, *, tenant: TenantContext,
-                                 session_id: SessionId,
-                                 params: Dict[str, Any], app_state: Any
-                                 ) -> Dict[str, Any]:
+    async def _handle_tools_list(
+        self,
+        *,
+        tenant: TenantContext,
+        session_id: SessionId,
+        params: dict[str, Any],
+        app_state: Any,
+    ) -> dict[str, Any]:
         service = self._resolve_tool_service(app_state)
         tools = await service.list_tools(tenant=tenant)
         items = [
             ToolListItem(
-                name        = str(t.name),
-                description = t.description,
-                inputSchema = t.input_schema.json_schema,
+                name=str(t.name),
+                description=t.description,
+                inputSchema=t.input_schema.json_schema,
             )
             for t in tools
         ]
         return ToolListResult(tools=items).model_dump(exclude_none=True)
 
-    async def _handle_tools_call(self, *, tenant: TenantContext,
-                                 session_id: SessionId,
-                                 params: Dict[str, Any], app_state: Any
-                                 ) -> Dict[str, Any]:
+    async def _handle_tools_call(
+        self,
+        *,
+        tenant: TenantContext,
+        session_id: SessionId,
+        params: dict[str, Any],
+        app_state: Any,
+    ) -> dict[str, Any]:
         try:
             tcp = ToolCallParams.model_validate(params)
         except Exception as e:
@@ -259,10 +296,10 @@ class MCPDispatcher:
         service = self._resolve_tool_service(app_state)
         try:
             result = await service.execute_tool(
-                tenant    = tenant,
-                name      = tcp.name,
-                arguments = dict(tcp.arguments or {}),
-                context   = {"mcp_session_id": str(session_id)},
+                tenant=tenant,
+                name=tcp.name,
+                arguments=dict(tcp.arguments or {}),
+                context={"mcp_session_id": str(session_id)},
             )
         except ToolNotFoundError:
             raise JsonRpcException(TOOL_NOT_FOUND, f"Tool not found: {tcp.name}")
@@ -277,15 +314,19 @@ class MCPDispatcher:
                 content_dto.append(ToolContentText(text=block.text))
             elif isinstance(block, DomainToolImage):
                 from .types import ToolContentImage
-                content_dto.append(ToolContentImage(
-                    data=block.data, mimeType=block.mimeType,
-                ))
+
+                content_dto.append(
+                    ToolContentImage(
+                        data=block.data,
+                        mimeType=block.mimeType,
+                    )
+                )
             else:  # pragma: no cover — extra block types arrive in spec 2025-03-26
                 content_dto.append(ToolContentText(text=str(block)))
 
         return ToolCallResult(
-            content = content_dto,
-            isError = result.is_error,
+            content=content_dto,
+            isError=result.is_error,
         ).model_dump(exclude_none=True)
 
     # ── resources/* — goes through KnowledgeApplicationService ────
@@ -299,27 +340,35 @@ class MCPDispatcher:
             )
         return svc
 
-    async def _handle_resources_list(self, *, tenant: TenantContext,
-                                     session_id: SessionId,
-                                     params: Dict[str, Any], app_state: Any
-                                     ) -> Dict[str, Any]:
+    async def _handle_resources_list(
+        self,
+        *,
+        tenant: TenantContext,
+        session_id: SessionId,
+        params: dict[str, Any],
+        app_state: Any,
+    ) -> dict[str, Any]:
         service = self._resolve_knowledge_service(app_state)
         kbs = await service.list_knowledge_bases(tenant=tenant)
         resources = [
             Resource(
-                uri         = f"kb://{tenant.tenant_id}/{kb.id}",
-                name        = str(kb.name) or str(kb.id),
-                description = None,
-                mimeType    = "application/vnd.shielva.kb+json",
+                uri=f"kb://{tenant.tenant_id}/{kb.id}",
+                name=str(kb.name) or str(kb.id),
+                description=None,
+                mimeType="application/vnd.shielva.kb+json",
             )
             for kb in kbs
         ]
         return ResourceListResult(resources=resources).model_dump(exclude_none=True)
 
-    async def _handle_resources_read(self, *, tenant: TenantContext,
-                                     session_id: SessionId,
-                                     params: Dict[str, Any], app_state: Any
-                                     ) -> Dict[str, Any]:
+    async def _handle_resources_read(
+        self,
+        *,
+        tenant: TenantContext,
+        session_id: SessionId,
+        params: dict[str, Any],
+        app_state: Any,
+    ) -> dict[str, Any]:
         uri = (params or {}).get("uri") or ""
         if not isinstance(uri, str) or not uri.startswith("kb://"):
             raise JsonRpcException(INVALID_PARAMS, "uri must be a kb:// URI")
@@ -330,17 +379,18 @@ class MCPDispatcher:
 
         service = self._resolve_knowledge_service(app_state)
         from src.domain.knowledge.errors import KnowledgeBaseNotFoundError
+
         try:
             kb = await service.read_knowledge_base(kb_id=kb_id, tenant=tenant)
         except KnowledgeBaseNotFoundError:
             raise JsonRpcException(RESOURCE_NOT_FOUND, f"KB not found: {kb_id}")
 
         envelope = {
-            "kb_id":     str(kb.id),
-            "name":      str(kb.name),
-            "status":    kb.status.value,
+            "kb_id": str(kb.id),
+            "name": str(kb.name),
+            "status": kb.status.value,
             "documents": kb.doc_count,
-            "hint":      (
+            "hint": (
                 "Retrieve KB content via the 'rag_query' tool. The full "
                 "chunk set is not exposed as a single resource because "
                 "typical KBs contain tens of thousands of chunks."
@@ -349,9 +399,9 @@ class MCPDispatcher:
         return ResourceReadResult(
             contents=[
                 ResourceContents(
-                    uri      = uri,
-                    mimeType = "application/vnd.shielva.kb+json",
-                    text     = json.dumps(envelope, ensure_ascii=False),
+                    uri=uri,
+                    mimeType="application/vnd.shielva.kb+json",
+                    text=json.dumps(envelope, ensure_ascii=False),
                 )
             ],
         ).model_dump(exclude_none=True)
@@ -367,10 +417,14 @@ class MCPDispatcher:
             )
         return svc
 
-    async def _handle_prompts_list(self, *, tenant: TenantContext,
-                                   session_id: SessionId,
-                                   params: Dict[str, Any], app_state: Any
-                                   ) -> Dict[str, Any]:
+    async def _handle_prompts_list(
+        self,
+        *,
+        tenant: TenantContext,
+        session_id: SessionId,
+        params: dict[str, Any],
+        app_state: Any,
+    ) -> dict[str, Any]:
         # Bot listing is best-effort — the legacy registry has no
         # tenant-wide enumeration (it's bot-by-id), so the typical
         # response is an empty array. That's spec-conformant; clients
@@ -379,49 +433,55 @@ class MCPDispatcher:
         bots = await service.list_bots(tenant=tenant)
         prompts = [
             Prompt(
-                name        = f"bot/{bot.id}",
-                description = bot.description or f"Bot prompt template for {bot.name}",
-                arguments   = [
-                    PromptArgument(name=v.name, required=v.required)
-                    for v in bot.prompt_template.variables
-                ],
+                name=f"bot/{bot.id}",
+                description=bot.description or f"Bot prompt template for {bot.name}",
+                arguments=[PromptArgument(name=v.name, required=v.required) for v in bot.prompt_template.variables],
             )
             for bot in bots
         ]
         return PromptListResult(prompts=prompts).model_dump(exclude_none=True)
 
-    async def _handle_prompts_get(self, *, tenant: TenantContext,
-                                  session_id: SessionId,
-                                  params: Dict[str, Any], app_state: Any
-                                  ) -> Dict[str, Any]:
+    async def _handle_prompts_get(
+        self,
+        *,
+        tenant: TenantContext,
+        session_id: SessionId,
+        params: dict[str, Any],
+        app_state: Any,
+    ) -> dict[str, Any]:
         name = (params or {}).get("name") or ""
         if not name.startswith("bot/"):
             raise JsonRpcException(INVALID_PARAMS, "Prompt name must be 'bot/<bot_id>'")
-        bot_id = name[len("bot/"):]
+        bot_id = name[len("bot/") :]
         service = self._resolve_bot_service(app_state)
         from src.domain.bots.errors import BotNotFoundError
+
         try:
             rendered = await service.render_prompt(
-                bot_id   = bot_id,
-                tenant   = tenant,
-                arguments = (params or {}).get("arguments") or {},
+                bot_id=bot_id,
+                tenant=tenant,
+                arguments=(params or {}).get("arguments") or {},
             )
             bot = await service.get_bot(bot_id=bot_id, tenant=tenant)
         except BotNotFoundError:
             raise JsonRpcException(RESOURCE_NOT_FOUND, f"Bot not found: {bot_id}")
         return PromptGetResult(
-            description = bot.description or None,
-            messages    = [
+            description=bot.description or None,
+            messages=[
                 PromptMessage(role="user", content=ToolContentText(text=rendered)),
             ],
         ).model_dump(exclude_none=True)
 
     # ── notification handlers ──────────────────────────────────────
 
-    async def _handle_initialized(self, *, tenant: TenantContext,
-                                  session_id: Optional[SessionId],
-                                  params: Dict[str, Any], app_state: Any
-                                  ) -> None:
+    async def _handle_initialized(
+        self,
+        *,
+        tenant: TenantContext,
+        session_id: SessionId | None,
+        params: dict[str, Any],
+        app_state: Any,
+    ) -> None:
         if session_id is None:
             return  # malformed; spec says drop silently
         try:
@@ -431,10 +491,14 @@ class MCPDispatcher:
         except SessionStateError as e:
             logger.warning("mcp.initialized_bad_state", error=str(e))
 
-    async def _handle_cancelled(self, *, tenant: TenantContext,
-                                session_id: Optional[SessionId],
-                                params: Dict[str, Any], app_state: Any
-                                ) -> None:
+    async def _handle_cancelled(
+        self,
+        *,
+        tenant: TenantContext,
+        session_id: SessionId | None,
+        params: dict[str, Any],
+        app_state: Any,
+    ) -> None:
         # v1: log only. v2 will propagate cancellation into in-
         # flight tool calls via an asyncio.Event keyed on requestId.
         logger.info(

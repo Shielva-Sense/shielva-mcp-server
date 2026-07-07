@@ -1,4 +1,5 @@
 """Centralised FastAPI exception handlers for shielva-mcp."""
+
 from __future__ import annotations
 
 import structlog

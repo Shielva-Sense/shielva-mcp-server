@@ -2,12 +2,12 @@
 
 All immutable, equal-by-value. No I/O.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
 from typing import NewType
-
 
 # A session id is a cryptographically-secure unique string. The
 # generator lives in infrastructure (uuid.uuid4) so domain stays free
@@ -24,9 +24,10 @@ class SessionState(str, Enum):
         READY        → CLOSING  on DELETE / explicit shutdown
         CLOSING      → (gone)   after cleanup
     """
+
     INITIALIZING = "initializing"
-    READY        = "ready"
-    CLOSING      = "closing"
+    READY = "ready"
+    CLOSING = "closing"
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,6 +39,7 @@ class ProtocolVersion:
     supported version; if the client doesn't support it, the client
     disconnects (server has no choice — there's no version range).
     """
+
     value: str
 
     def __str__(self) -> str:
@@ -47,5 +49,6 @@ class ProtocolVersion:
 @dataclass(frozen=True, slots=True)
 class ClientInfo:
     """Self-reported identity of the connecting MCP client."""
-    name:    str
+
+    name: str
     version: str

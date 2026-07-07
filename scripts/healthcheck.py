@@ -12,6 +12,7 @@ readinessProbe → /ready).
 Kept dependency-free — only stdlib — so the runtime image carries no
 extra wheels and so a broken httpx won't break the healthcheck.
 """
+
 from __future__ import annotations
 
 import os
@@ -24,7 +25,7 @@ def main() -> int:
     port = os.environ.get("PORT") or os.environ.get("MCP_PORT") or "8004"
     url = f"http://127.0.0.1:{port}/health"
     try:
-        with urllib.request.urlopen(url, timeout=2) as r:  # noqa: S310
+        with urllib.request.urlopen(url, timeout=2) as r:
             return 0 if 200 <= r.status < 600 else 1
     except urllib.error.HTTPError as e:
         # An HTTP error still means the listener answered. Treat any

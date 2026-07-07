@@ -5,10 +5,10 @@ InlineQARouter) that need vectors in the same space as MCP's
 retrieval layer. Single-method router; the use case is read-only +
 side-effect-free so it bypasses the policy gate.
 """
+
 from __future__ import annotations
 
 import os
-from typing import List
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -27,7 +27,7 @@ embeddings_router = APIRouter(prefix=_PREFIX, tags=["embeddings"])
 # Wire shape — matches the existing client contract (presence-core
 # already calls this endpoint with this body shape).
 class EmbeddingsRequest(BaseModel):
-    texts: List[str] = Field(
+    texts: list[str] = Field(
         ...,
         description="Texts to embed. Capped at 256 per request.",
         min_length=1,
@@ -35,10 +35,10 @@ class EmbeddingsRequest(BaseModel):
 
 
 class EmbeddingsResponse(BaseModel):
-    embeddings: List[List[float]]
-    dimension:  int
-    model:      str
-    count:      int
+    embeddings: list[list[float]]
+    dimension: int
+    model: str
+    count: int
 
 
 # Cap per request — keeps latency bounded + prevents OOM via a
@@ -49,7 +49,7 @@ _MAX_PER_REQUEST = 256
 
 @embeddings_router.post("/embeddings", response_model=EmbeddingsResponse)
 async def generate_embeddings(
-    body:    EmbeddingsRequest,
+    body: EmbeddingsRequest,
     request: Request,
     tenant_context=Depends(get_tenant_context),
 ) -> EmbeddingsResponse:
@@ -83,10 +83,11 @@ async def generate_embeddings(
 
     try:
         vectors = await client.embed(body.texts)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.error(
             "embedding_generation_failed",
-            error=str(e), tenant=tenant_context.tenant_id,
+            error=str(e),
+            tenant=tenant_context.tenant_id,
         )
         raise HTTPException(status_code=500, detail=f"Embedding generation failed: {e}")
 

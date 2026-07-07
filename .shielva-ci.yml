@@ -1,0 +1,9 @@
+# CI gate config consumed by shielva/ci (flow-pipeline CI runner).
+audit:
+  # Non-exploitable transitive advisories with no upstream fix. Accepted by
+  # package name (survives new CVE ids for the same package).
+  ignore:
+    # ecdsa (transitive via python-jose[cryptography]) — PYSEC-2026-1325, no fix
+    # released; the ECDSA signing path is not reachable from this service.
+    # Revisit when ecdsa ships a fixed release.
+    - ecdsa

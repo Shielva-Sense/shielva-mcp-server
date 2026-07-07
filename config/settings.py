@@ -6,11 +6,10 @@ or kwargs. Plaintext defaults are rejected at boot.
 
 See shielva_common/config/sealed.py for the full contract.
 """
+
 from functools import lru_cache
-from typing import List, Optional
 
 from pydantic import Field, SecretStr
-
 from shielva_common.config.sealed import SealedSettings, sealed_field
 
 
@@ -59,7 +58,7 @@ class MCPSettings(SealedSettings):
     # legacy "supabase_*" naming was misleading and has been renamed. The
     # connection-string env is now MCP_VECTOR_DB_URL; SUPABASE_DB_URL is kept
     # as a backward-compat alias until the deployment env is migrated.
-    supabase_url: Optional[str] = None
+    supabase_url: str | None = None
     supabase_key: SecretStr = sealed_field(
         SecretStr(""),
         env="SUPABASE_KEY",
@@ -88,22 +87,33 @@ class MCPSettings(SealedSettings):
     # ── LLM Configuration (SECRET — API keys) ────────────────────────────
     default_llm_provider: str = "gemini"
     openai_api_key: SecretStr = sealed_field(
-        SecretStr(""), env="OPENAI_API_KEY", file_env="OPENAI_API_KEY_FILE",
+        SecretStr(""),
+        env="OPENAI_API_KEY",
+        file_env="OPENAI_API_KEY_FILE",
     )
     anthropic_api_key: SecretStr = sealed_field(
-        SecretStr(""), env="ANTHROPIC_API_KEY", file_env="ANTHROPIC_API_KEY_FILE",
+        SecretStr(""),
+        env="ANTHROPIC_API_KEY",
+        file_env="ANTHROPIC_API_KEY_FILE",
     )
     azure_openai_api_key: SecretStr = sealed_field(
-        SecretStr(""), env="AZURE_OPENAI_API_KEY", file_env="AZURE_OPENAI_API_KEY_FILE",
+        SecretStr(""),
+        env="AZURE_OPENAI_API_KEY",
+        file_env="AZURE_OPENAI_API_KEY_FILE",
     )
-    azure_openai_endpoint: Optional[str] = None
+    azure_openai_endpoint: str | None = None
     gemini_api_key: SecretStr = sealed_field(
-        SecretStr(""), env="GEMINI_API_KEY", file_env="GEMINI_API_KEY_FILE",
+        SecretStr(""),
+        env="GEMINI_API_KEY",
+        file_env="GEMINI_API_KEY_FILE",
     )
 
     # ── LiteLLM Config (non-secret) ──────────────────────────────────────
     litellm_model: str = "gemini/gemini-2.5-flash-lite"
-    litellm_fallback_models: List[str] = ["gemini/gemini-2.5-flash", "gemini/gemini-2.5-pro"]
+    litellm_fallback_models: list[str] = [
+        "gemini/gemini-2.5-flash",
+        "gemini/gemini-2.5-pro",
+    ]
     max_tokens: int = 65536
     temperature: float = 0.1
 
@@ -116,7 +126,9 @@ class MCPSettings(SealedSettings):
     # shielva-platform's PLATFORM_INTERNAL_TOKEN.
     platform_internal_url: str = Field("", validation_alias="PLATFORM_INTERNAL_URL")
     platform_internal_token: SecretStr = sealed_field(
-        SecretStr(""), env="PLATFORM_INTERNAL_TOKEN", file_env="PLATFORM_INTERNAL_TOKEN_FILE",
+        SecretStr(""),
+        env="PLATFORM_INTERNAL_TOKEN",
+        file_env="PLATFORM_INTERNAL_TOKEN_FILE",
     )
     tenant_llm_cache_ttl: int = 60
     # Verify TLS on the resolver call. DEV: localhost uses self-signed certs →
@@ -184,18 +196,22 @@ class MCPSettings(SealedSettings):
     )
 
     # ── Vault sidecar (non-secret URL) ───────────────────────────────────
-    vault_url: Optional[str] = Field(None, validation_alias="VAULT_SIDECAR_URL")
+    vault_url: str | None = Field(None, validation_alias="VAULT_SIDECAR_URL")
     vault_token: SecretStr = sealed_field(
-        SecretStr(""), env="VAULT_TOKEN", file_env="VAULT_TOKEN_FILE",
+        SecretStr(""),
+        env="VAULT_TOKEN",
+        file_env="VAULT_TOKEN_FILE",
     )
 
     # ── Policy Engine (non-secret URL) ───────────────────────────────────
-    opa_url: Optional[str] = None
+    opa_url: str | None = None
 
     # ── Observability (SECRET keys) ──────────────────────────────────────
-    otlp_endpoint: Optional[str] = None
+    otlp_endpoint: str | None = None
     langsmith_api_key: SecretStr = sealed_field(
-        SecretStr(""), env="LANGSMITH_API_KEY", file_env="LANGSMITH_API_KEY_FILE",
+        SecretStr(""),
+        env="LANGSMITH_API_KEY",
+        file_env="LANGSMITH_API_KEY_FILE",
     )
     langsmith_project: str = "shielva-mcp"
 
@@ -241,16 +257,17 @@ def _bridge_legacy_vector_db_env() -> None:
             # treats the canonical key as decrypted just like the legacy one.
             try:
                 from shielva_common.config.sealed import (
-                    _was_decrypted,
                     _record_decrypted,
+                    _was_decrypted,
                 )
+
                 if _was_decrypted(leg):
                     _record_decrypted([can])
             except Exception:  # pragma: no cover - provenance bridge is best-effort
                 pass
 
 
-@lru_cache()
+@lru_cache
 def get_settings() -> MCPSettings:
     """Get cached settings instance.
 

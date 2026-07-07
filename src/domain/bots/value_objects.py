@@ -1,27 +1,28 @@
 """Value objects for the bots context."""
+
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
-from typing import Dict, NewType, Tuple
+from typing import NewType
 
-
-BotId   = NewType("BotId",   str)
+BotId = NewType("BotId", str)
 BotName = NewType("BotName", str)
 
 
 class BotStatus(str, Enum):
-    DRAFT     = "draft"
-    TESTING   = "testing"
-    ACTIVE    = "active"
+    DRAFT = "draft"
+    TESTING = "testing"
+    ACTIVE = "active"
     SUSPENDED = "suspended"
 
 
 @dataclass(frozen=True, slots=True)
 class PromptVariable:
     """One ``{{var}}`` placeholder found in a prompt template."""
-    name:     str
+
+    name: str
     required: bool = False
 
 
@@ -41,10 +42,11 @@ class PromptTemplate:
           honoured uniformly regardless of which adapter sourced
           the template (Mongo bot config, in-memory fallback, …).
     """
+
     text: str
 
     @property
-    def variables(self) -> Tuple[PromptVariable, ...]:
+    def variables(self) -> tuple[PromptVariable, ...]:
         seen: set[str] = set()
         out: list[PromptVariable] = []
         for match in _VARIABLE_PATTERN.finditer(self.text):
@@ -59,7 +61,7 @@ class PromptTemplate:
             out.append(PromptVariable(name=name, required=False))
         return tuple(out)
 
-    def render(self, arguments: Dict[str, str]) -> str:
+    def render(self, arguments: dict[str, str]) -> str:
         if not arguments:
             return self.text
         out = self.text

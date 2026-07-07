@@ -1,18 +1,23 @@
 """Knowledge application service — listings + retrieval use cases."""
+
 from __future__ import annotations
 
 import time
-from typing import List, Optional, Tuple
 
 import structlog
 
 from src.domain.knowledge.entities import KnowledgeBase
 from src.domain.knowledge.errors import KnowledgeBaseNotFoundError
 from src.domain.knowledge.repositories import (
-    EmbeddingClient, KBRepository, Retriever,
+    EmbeddingClient,
+    KBRepository,
+    Retriever,
 )
 from src.domain.knowledge.value_objects import (
-    KBId, RetrievalQuery, RetrievedChunk, Source,
+    KBId,
+    RetrievalQuery,
+    RetrievedChunk,
+    Source,
 )
 from src.domain.shared.tenant import TenantContext
 
@@ -31,22 +36,24 @@ class KnowledgeApplicationService:
     def __init__(
         self,
         *,
-        kb_repository:    KBRepository,
-        retriever:        Retriever,
+        kb_repository: KBRepository,
+        retriever: Retriever,
         embedding_client: EmbeddingClient,
     ) -> None:
-        self._kb_repo   = kb_repository
+        self._kb_repo = kb_repository
         self._retriever = retriever
-        self._embedder  = embedding_client
+        self._embedder = embedding_client
 
     # ── listings ──────────────────────────────────────────────────
 
-    async def list_knowledge_bases(self, *, tenant: TenantContext
-                                   ) -> List[KnowledgeBase]:
+    async def list_knowledge_bases(self, *, tenant: TenantContext) -> list[KnowledgeBase]:
         return await self._kb_repo.list_for_tenant(tenant=tenant)
 
     async def read_knowledge_base(
-        self, *, kb_id: str, tenant: TenantContext,
+        self,
+        *,
+        kb_id: str,
+        tenant: TenantContext,
     ) -> KnowledgeBase:
         kb = await self._kb_repo.get(KBId(kb_id), tenant=tenant)
         if kb is None or not kb.is_visible_to(tenant):
@@ -58,11 +65,11 @@ class KnowledgeApplicationService:
     async def retrieve_chunks(
         self,
         *,
-        tenant:  TenantContext,
-        query:   str,
-        kb_ids:  Optional[Tuple[KBId, ...]] = None,
-        top_k:   int = 5,
-    ) -> List[Source]:
+        tenant: TenantContext,
+        query: str,
+        kb_ids: tuple[KBId, ...] | None = None,
+        top_k: int = 5,
+    ) -> list[Source]:
         """Retrieve the most relevant chunks for ``query`` and convert
         them to :class:`Source` view-models ready for LLM injection.
 
@@ -83,8 +90,10 @@ class KnowledgeApplicationService:
         started = time.monotonic()
         logger.info(
             "mcp.retrieval_start",
-            tenant_id=tenant.tenant_id, kb_count=len(kb_ids),
-            top_k=top_k, query_len=len(query or ""),
+            tenant_id=tenant.tenant_id,
+            kb_count=len(kb_ids),
+            top_k=top_k,
+            query_len=len(query or ""),
         )
 
         # Embedding happens inside the retriever for hybrid impls —
@@ -92,10 +101,13 @@ class KnowledgeApplicationService:
         # call ``self._embedder.embed([query])`` here and pass the
         # vector to VectorStore.similarity_search directly.)
         retrieval_query = RetrievalQuery(
-            query=query, kb_ids=kb_ids, top_k=top_k,
+            query=query,
+            kb_ids=kb_ids,
+            top_k=top_k,
         )
         retrieved = await self._retriever.retrieve(
-            retrieval_query, tenant=tenant,
+            retrieval_query,
+            tenant=tenant,
         )
 
         # Materialize Source view-models. The KB-id → name lookup is
@@ -104,7 +116,7 @@ class KnowledgeApplicationService:
         kbs = await self._kb_repo.list_for_tenant(tenant=tenant)
         kb_name_by_id = {kb.id: kb.name for kb in kbs}
 
-        sources: List[Source] = []
+        sources: list[Source] = []
         for rc in retrieved:
             kb_name = kb_name_by_id.get(rc.chunk.kb_id) or rc.chunk.kb_id
             sources.append(_to_source(rc, kb_name=str(kb_name)))
@@ -121,18 +133,19 @@ class KnowledgeApplicationService:
 
 # ── helpers ───────────────────────────────────────────────────────
 
+
 def _to_source(rc: RetrievedChunk, *, kb_name: str) -> Source:
     """Trim chunk content to the preview cap so wire size stays bounded."""
     excerpt = rc.chunk.content or ""
     if len(excerpt) > _SOURCE_CONTENT_PREVIEW_CHARS:
-        excerpt = excerpt[:_SOURCE_CONTENT_PREVIEW_CHARS - 1] + "…"
+        excerpt = excerpt[: _SOURCE_CONTENT_PREVIEW_CHARS - 1] + "…"
     return Source(
-        kb_id          = rc.chunk.kb_id,
-        kb_name        = kb_name,  # type: ignore[arg-type] — str matches KBName NewType
-        document_id    = rc.chunk.document_id,
-        document_title = str(rc.chunk.metadata.get("document_title") or ""),
-        chunk_id       = rc.chunk.id,
-        content        = excerpt,
-        score          = round(rc.score, 4),
-        metadata       = dict(rc.chunk.metadata or {}),
+        kb_id=rc.chunk.kb_id,
+        kb_name=kb_name,  # type: ignore[arg-type] — str matches KBName NewType
+        document_id=rc.chunk.document_id,
+        document_title=str(rc.chunk.metadata.get("document_title") or ""),
+        chunk_id=rc.chunk.id,
+        content=excerpt,
+        score=round(rc.score, 4),
+        metadata=dict(rc.chunk.metadata or {}),
     )

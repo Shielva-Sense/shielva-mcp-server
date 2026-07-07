@@ -16,11 +16,11 @@ What lives ON the aggregate vs. on the application service:
         * notifications/progress fan-out (delivered via the SSE
           adapter, not the aggregate — the aggregate has no I/O)
 """
+
 from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from typing import Optional
 
 from ..shared.tenant import TenantContext
 from .errors import SessionStateError
@@ -35,14 +35,15 @@ class Session:
     preserved. The repository (port) is responsible for round-
     tripping the aggregate's fields without leaking storage detail.
     """
-    id:               SessionId
-    tenant:           TenantContext
+
+    id: SessionId
+    tenant: TenantContext
     protocol_version: ProtocolVersion
-    state:            SessionState     = SessionState.INITIALIZING
-    client_info:      Optional[ClientInfo] = None
-    log_level:        str              = "info"
-    created_at:       float            = field(default_factory=time.time)
-    last_activity_at: float            = field(default_factory=time.time)
+    state: SessionState = SessionState.INITIALIZING
+    client_info: ClientInfo | None = None
+    log_level: str = "info"
+    created_at: float = field(default_factory=time.time)
+    last_activity_at: float = field(default_factory=time.time)
 
     # ── state transitions ──────────────────────────────────────────
 
@@ -55,9 +56,7 @@ class Session:
         elif self.state is SessionState.READY:
             return
         else:
-            raise SessionStateError(
-                f"Cannot mark ready from state {self.state.value!r}"
-            )
+            raise SessionStateError(f"Cannot mark ready from state {self.state.value!r}")
 
     def mark_closing(self) -> None:
         """Begin teardown. The repository GCs the session afterward."""
@@ -73,7 +72,7 @@ class Session:
 
     # ── activity tracking (for idle-GC) ────────────────────────────
 
-    def touch(self, now: Optional[float] = None) -> None:
+    def touch(self, now: float | None = None) -> None:
         self.last_activity_at = now if now is not None else time.time()
 
     # ── invariants helpers (used by application services) ─────────

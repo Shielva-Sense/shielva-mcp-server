@@ -13,6 +13,7 @@ Proves:
     * close is idempotent.
     * assert_method_allowed honours the spec's pre-initialize gate.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -23,24 +24,25 @@ from src.domain.chat.value_objects import ClientInfo, SessionId, SessionState
 from src.domain.shared.tenant import TenantContext
 from src.infrastructure.persistence import InMemoryChatSessionRepository
 
-
 _PROTOCOL = "2024-11-05"
 
 
 def _ids():
     """Deterministic id factory — each call returns the next "sid-N"."""
     counter = {"n": 0}
+
     def factory() -> str:
         counter["n"] += 1
         return f"sid-{counter['n']}"
+
     return factory
 
 
 def _service() -> ChatApplicationService:
     return ChatApplicationService(
-        repository                 = InMemoryChatSessionRepository(),
-        session_id_factory         = _ids(),
-        server_protocol_version    = _PROTOCOL,
+        repository=InMemoryChatSessionRepository(),
+        session_id_factory=_ids(),
+        server_protocol_version=_PROTOCOL,
     )
 
 
@@ -56,7 +58,8 @@ def _tenant(tid: str = "t1") -> TenantContext:
 async def test_initialize_creates_session_in_initializing_state():
     svc = _service()
     s = await svc.initialize(
-        tenant=_tenant(), client_info=_client(),
+        tenant=_tenant(),
+        client_info=_client(),
         client_protocol_version=_PROTOCOL,
     )
     assert s.state is SessionState.INITIALIZING
@@ -67,7 +70,8 @@ async def test_initialize_creates_session_in_initializing_state():
 async def test_mark_initialized_transitions_to_ready():
     svc = _service()
     s = await svc.initialize(
-        tenant=_tenant(), client_info=_client(),
+        tenant=_tenant(),
+        client_info=_client(),
         client_protocol_version=_PROTOCOL,
     )
     await svc.mark_initialized(session_id=s.id, tenant=_tenant())
@@ -79,7 +83,8 @@ async def test_mark_initialized_transitions_to_ready():
 async def test_foreign_tenant_cannot_load_session():
     svc = _service()
     s = await svc.initialize(
-        tenant=_tenant("alice"), client_info=_client(),
+        tenant=_tenant("alice"),
+        client_info=_client(),
         client_protocol_version=_PROTOCOL,
     )
     with pytest.raises(SessionNotFoundError):
@@ -90,7 +95,8 @@ async def test_foreign_tenant_cannot_load_session():
 async def test_close_is_idempotent():
     svc = _service()
     s = await svc.initialize(
-        tenant=_tenant(), client_info=_client(),
+        tenant=_tenant(),
+        client_info=_client(),
         client_protocol_version=_PROTOCOL,
     )
     assert await svc.close(session_id=s.id, tenant=_tenant()) is True
@@ -102,12 +108,15 @@ async def test_close_is_idempotent():
 async def test_assert_method_allowed_blocks_pre_initialize():
     svc = _service()
     s = await svc.initialize(
-        tenant=_tenant(), client_info=_client(),
+        tenant=_tenant(),
+        client_info=_client(),
         client_protocol_version=_PROTOCOL,
     )
     with pytest.raises(SessionStateError):
         await svc.assert_method_allowed(
-            session_id=s.id, tenant=_tenant(), method="tools/list",
+            session_id=s.id,
+            tenant=_tenant(),
+            method="tools/list",
         )
 
 
@@ -115,13 +124,16 @@ async def test_assert_method_allowed_blocks_pre_initialize():
 async def test_assert_method_allowed_after_ready():
     svc = _service()
     s = await svc.initialize(
-        tenant=_tenant(), client_info=_client(),
+        tenant=_tenant(),
+        client_info=_client(),
         client_protocol_version=_PROTOCOL,
     )
     await svc.mark_initialized(session_id=s.id, tenant=_tenant())
     # Must not raise — session is READY, all methods unblocked.
     await svc.assert_method_allowed(
-        session_id=s.id, tenant=_tenant(), method="tools/list",
+        session_id=s.id,
+        tenant=_tenant(),
+        method="tools/list",
     )
 
 
@@ -130,7 +142,8 @@ async def test_unknown_session_raises_session_not_found():
     svc = _service()
     with pytest.raises(SessionNotFoundError):
         await svc.get_for_tenant(
-            session_id=SessionId("missing"), tenant=_tenant(),
+            session_id=SessionId("missing"),
+            tenant=_tenant(),
         )
 
 

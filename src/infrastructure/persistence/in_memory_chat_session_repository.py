@@ -10,11 +10,11 @@ Concurrency:
     every mutation with an asyncio.Lock so iteration during gc_idle
     never races with a concurrent save() or delete().
 """
+
 from __future__ import annotations
 
 import asyncio
 import time
-from typing import Dict, Optional
 
 import structlog
 
@@ -31,10 +31,10 @@ class InMemoryChatSessionRepository(ChatSessionRepository):
     expectation that clients must re-initialize after disconnect."""
 
     def __init__(self) -> None:
-        self._sessions: Dict[str, Session] = {}
+        self._sessions: dict[str, Session] = {}
         self._lock = asyncio.Lock()
 
-    async def get(self, session_id: SessionId) -> Optional[Session]:
+    async def get(self, session_id: SessionId) -> Session | None:
         # No lock needed for a single dict-read; lock is for the
         # composite mutations below.
         return self._sessions.get(str(session_id))
@@ -50,10 +50,7 @@ class InMemoryChatSessionRepository(ChatSessionRepository):
     async def gc_idle(self, idle_seconds: int) -> int:
         cutoff = time.time() - max(1, int(idle_seconds))
         async with self._lock:
-            stale = [
-                sid for sid, s in self._sessions.items()
-                if s.last_activity_at < cutoff
-            ]
+            stale = [sid for sid, s in self._sessions.items() if s.last_activity_at < cutoff]
             for sid in stale:
                 self._sessions.pop(sid, None)
         if stale:

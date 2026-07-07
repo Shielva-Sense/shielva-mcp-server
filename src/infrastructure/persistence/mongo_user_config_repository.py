@@ -9,15 +9,14 @@ The ``get_user_config_repo`` FastAPI dependency function returns the
 singleton instance, allowing callers to test with a stub via
 ``app.dependency_overrides``.
 """
-from __future__ import annotations
 
-from typing import Optional
+from __future__ import annotations
 
 import structlog
 
 logger = structlog.get_logger(__name__)
 
-_INSTANCE: Optional["MongoUserConfigRepository"] = None
+_INSTANCE: MongoUserConfigRepository | None = None
 
 
 class MongoUserConfigRepository:
@@ -37,6 +36,7 @@ class MongoUserConfigRepository:
         if client is None:
             try:
                 import certifi as _c
+
                 tls = {"tlsCAFile": _c.where()} if url.startswith("mongodb+srv") else {}
             except ImportError:
                 tls = {}
@@ -54,12 +54,10 @@ class MongoUserConfigRepository:
         try:
             client = self._get_client()
             db = client["CustomerProfile"]
-            user_config = await db["llm_user_configuration"].find_one(
-                {"user_email": user_email}
-            )
+            user_config = await db["llm_user_configuration"].find_one({"user_email": user_email})
             if user_config and "access_permissions" in user_config:
                 return list(user_config["access_permissions"])
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.warning(
                 "user_config_repo.get_permissions_failed",
                 user_email=user_email,

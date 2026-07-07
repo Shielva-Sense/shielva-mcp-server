@@ -15,11 +15,11 @@ a list of content blocks (text|image), plus an ``is_error`` flag.
 Domain code never constructs the protocol-wire JSON — the interface
 layer translates this VO into the spec's JSON envelope.
 """
+
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any, Dict, NewType, Tuple, Union
-
+from dataclasses import dataclass
+from typing import Any, NewType, Union
 
 # A tool name is a stable string identifier. NewType keeps it nominal
 # so accidental ``str -> ToolName`` is a type error in mypy.
@@ -34,10 +34,12 @@ class ToolSchema:
     keep it framework-free — no Pydantic model — so the domain stays
     importable from anywhere.
     """
-    json_schema: Dict[str, Any]
+
+    json_schema: dict[str, Any]
 
 
 # ── Content blocks (MCP spec) ───────────────────────────────────────
+
 
 @dataclass(frozen=True, slots=True)
 class ToolText:
@@ -49,9 +51,10 @@ class ToolText:
 class ToolImage:
     """Base64-encoded image; MCP spec requires the mime type so the
     client knows how to render it."""
-    data:     str   # base64
+
+    data: str  # base64
     mimeType: str
-    type:     str = "image"
+    type: str = "image"
 
 
 # Union type for tool content. Spec adds ``audio`` and ``resource``
@@ -68,14 +71,15 @@ class ToolResult:
     decide whether to retry. The interface adapter translates this
     accordingly.
     """
-    content:  Tuple[ToolContentBlock, ...]
+
+    content: tuple[ToolContentBlock, ...]
     is_error: bool = False
 
     @classmethod
-    def text(cls, text: str, *, is_error: bool = False) -> "ToolResult":
+    def text(cls, text: str, *, is_error: bool = False) -> ToolResult:
         """Convenience: single-block text result."""
         return cls(content=(ToolText(text=text),), is_error=is_error)
 
     @classmethod
-    def failure(cls, message: str) -> "ToolResult":
+    def failure(cls, message: str) -> ToolResult:
         return cls.text(message, is_error=True)

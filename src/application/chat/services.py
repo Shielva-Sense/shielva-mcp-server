@@ -18,9 +18,10 @@ The service is constructed with the port + a session-id factory
 injected. The factory is a callable (``Callable[[], str]``) so tests
 can plug in deterministic ids without touching uuid.
 """
+
 from __future__ import annotations
 
-from typing import Awaitable, Callable, Optional
+from collections.abc import Callable
 
 import structlog
 
@@ -28,7 +29,10 @@ from src.domain.chat.entities import Session
 from src.domain.chat.errors import SessionNotFoundError, SessionStateError
 from src.domain.chat.repositories import ChatSessionRepository
 from src.domain.chat.value_objects import (
-    ClientInfo, ProtocolVersion, SessionId, SessionState,
+    ClientInfo,
+    ProtocolVersion,
+    SessionId,
+    SessionState,
 )
 from src.domain.shared.tenant import TenantContext
 
@@ -68,11 +72,11 @@ class ChatApplicationService:
         either accept or disconnect.
         """
         session = Session(
-            id               = SessionId(self._make_id()),
-            tenant           = tenant,
-            protocol_version = ProtocolVersion(self._server_protocol_version),
-            client_info      = client_info,
-            state            = SessionState.INITIALIZING,
+            id=SessionId(self._make_id()),
+            tenant=tenant,
+            protocol_version=ProtocolVersion(self._server_protocol_version),
+            client_info=client_info,
+            state=SessionState.INITIALIZING,
         )
         await self._repo.save(session)
         logger.info(
@@ -85,31 +89,27 @@ class ChatApplicationService:
         )
         return session
 
-    async def mark_initialized(self, *, session_id: SessionId,
-                               tenant: TenantContext) -> None:
+    async def mark_initialized(self, *, session_id: SessionId, tenant: TenantContext) -> None:
         """Apply ``notifications/initialized`` — moves INITIALIZING → READY."""
         session = await self._load_owned(session_id, tenant)
         session.mark_ready()
         session.touch()
         await self._repo.save(session)
 
-    async def ping(self, *, session_id: Optional[SessionId],
-                   tenant: TenantContext) -> None:
+    async def ping(self, *, session_id: SessionId | None, tenant: TenantContext) -> None:
         """Liveness. Allowed pre-session (no session_id supplied).
         When session_id is supplied it must exist + belong to the tenant."""
         if session_id is None:
             return
         await self._load_owned(session_id, tenant)
 
-    async def set_log_level(self, *, session_id: SessionId,
-                            tenant: TenantContext, level: str) -> None:
+    async def set_log_level(self, *, session_id: SessionId, tenant: TenantContext, level: str) -> None:
         session = await self._load_owned(session_id, tenant)
         session.set_log_level(level)
         session.touch()
         await self._repo.save(session)
 
-    async def close(self, *, session_id: SessionId,
-                    tenant: TenantContext) -> bool:
+    async def close(self, *, session_id: SessionId, tenant: TenantContext) -> bool:
         """DELETE /mcp. Returns True if a session was removed."""
         # We load first so the tenant-ownership check fires; then we
         # remove. Not-found is silently fine (idempotent close).
@@ -121,8 +121,7 @@ class ChatApplicationService:
 
     # ── helpers used by interface adapter ─────────────────────────
 
-    async def get_for_tenant(self, *, session_id: SessionId,
-                             tenant: TenantContext) -> Session:
+    async def get_for_tenant(self, *, session_id: SessionId, tenant: TenantContext) -> Session:
         """Load + ownership check + touch. The interface adapter calls
         this on every request that carries a session id; if the
         session is unknown we raise :class:`SessionNotFoundError`
@@ -133,8 +132,7 @@ class ChatApplicationService:
         await self._repo.save(session)
         return session
 
-    async def assert_method_allowed(self, *, session_id: SessionId,
-                                    tenant: TenantContext, method: str) -> Session:
+    async def assert_method_allowed(self, *, session_id: SessionId, tenant: TenantContext, method: str) -> Session:
         """Combines load + state-check. Raises SessionStateError if
         the method isn't allowed in the session's current state."""
         session = await self._load_owned(session_id, tenant)
@@ -148,8 +146,7 @@ class ChatApplicationService:
 
     # ── internal ──────────────────────────────────────────────────
 
-    async def _load_owned(self, session_id: SessionId,
-                          tenant: TenantContext) -> Session:
+    async def _load_owned(self, session_id: SessionId, tenant: TenantContext) -> Session:
         session = await self._repo.get(session_id)
         if session is None:
             raise SessionNotFoundError(f"Unknown session: {session_id}")

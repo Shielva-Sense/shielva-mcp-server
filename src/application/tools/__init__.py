@@ -7,6 +7,7 @@ Two use cases for the MCP spec methods:
 Both delegate to the two-port pair (ToolCatalogue + ToolExecutor) so
 the application service has no idea how tools are stored or run.
 """
+
 from .services import ToolApplicationService
 
 __all__ = ["ToolApplicationService"]

@@ -11,6 +11,7 @@ Slice 3 ships :class:`KnowledgeApplicationService` with:
 Provisioning (``provision_kb``) lands in slice 4 alongside the
 bot context — they share an MCP REST endpoint.
 """
+
 from .services import KnowledgeApplicationService
 
 __all__ = ["KnowledgeApplicationService"]

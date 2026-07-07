@@ -12,20 +12,20 @@ Run from the mcp-server directory:
 """
 
 import asyncio
-import uuid
-import sys
 import os
+import sys
+import uuid
 
 # Make sure project modules are importable
 sys.path.insert(0, os.path.dirname(__file__))
 
 from dotenv import load_dotenv
+
 load_dotenv(".env", override=True)
 
 # ── Knowledge content ─────────────────────────────────────────────────────────
 
 KNOWLEDGE_CHUNKS = [
-
     # ── Shielva system overview ───────────────────────────────────────────────
     {
         "title": "Shielva Logstream Cluster Overview",
@@ -91,7 +91,6 @@ KNOWLEDGE_CHUNKS = [
             "Errors > 10% of sends = degraded. Errors > 50% = failed."
         ),
     },
-
     # ── Kafka throughput best practices ──────────────────────────────────────
     {
         "title": "Kafka Throughput Optimisation: Producer Batching",
@@ -131,7 +130,6 @@ KNOWLEDGE_CHUNKS = [
             "min.insync.replicas=2 with acks=all is the recommended production combination."
         ),
     },
-
     # ── Latency best practices ────────────────────────────────────────────────
     {
         "title": "Kafka Latency Optimisation",
@@ -146,7 +144,6 @@ KNOWLEDGE_CHUNKS = [
             "For sub-millisecond latency: linger_ms=0, acks=1, no compression, large batch.size."
         ),
     },
-
     # ── Error handling ────────────────────────────────────────────────────────
     {
         "title": "Kafka Producer Error Handling: Retries and Idempotency",
@@ -172,7 +169,6 @@ KNOWLEDGE_CHUNKS = [
             "A resilience test that hits the circuit breaker will show error bursts every 30s."
         ),
     },
-
     # ── Topic configuration ───────────────────────────────────────────────────
     {
         "title": "Kafka Topic Configuration Tuning",
@@ -202,7 +198,6 @@ KNOWLEDGE_CHUNKS = [
             "max.poll.interval.ms (default 5 min)."
         ),
     },
-
     # ── Analysis guide ────────────────────────────────────────────────────────
     {
         "title": "Interpreting Resilience Test Results: Healthy",
@@ -272,6 +267,7 @@ def _resolve_tenant_id() -> str:
     Raises ``SystemExit`` with a helpful message otherwise.
     """
     import argparse
+
     parser = argparse.ArgumentParser(description="Seed kafka-performance-bot")
     parser.add_argument(
         "--tenant-id",
@@ -294,9 +290,11 @@ def _make_kb_id(tenant_id: str) -> str:
 
 # ── Main seeding logic ────────────────────────────────────────────────────────
 
+
 async def embed_chunks(chunks: list[dict], gemini_api_key: str) -> list[dict]:
     """Embed each chunk using Gemini embedding API."""
     import google.generativeai as genai
+
     genai.configure(api_key=gemini_api_key)
 
     results = []
@@ -309,12 +307,15 @@ async def embed_chunks(chunks: list[dict], gemini_api_key: str) -> list[dict]:
         )
         embedding = resp["embedding"]
         results.append({**chunk, "embedding": embedding})
-        print(f"  [{i+1}/{len(chunks)}] Embedded: {chunk['title'][:60]}")
+        print(f"  [{i + 1}/{len(chunks)}] Embedded: {chunk['title'][:60]}")
     return results
 
 
 async def upsert_to_supabase(
-    embedded_chunks: list[dict], db_url: str, tenant_id: str, kb_id: str,
+    embedded_chunks: list[dict],
+    db_url: str,
+    tenant_id: str,
+    kb_id: str,
 ):
     """Create collection and upsert all chunks into Supabase pgvector."""
     import vecs
@@ -324,6 +325,7 @@ async def upsert_to_supabase(
     # Truncate if over 63 chars
     if len(collection_name) > 63:
         import hashlib
+
         h = hashlib.sha256(f"{tenant_id}_{kb_id}".encode()).hexdigest()[:32]
         collection_name = f"shielva_kb_{h}"
 
@@ -333,13 +335,13 @@ async def upsert_to_supabase(
     records = []
     for i, chunk in enumerate(embedded_chunks):
         doc_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"{kb_id}.{chunk['title']}"))
-        text   = f"{chunk['title']}\n\n{chunk['content']}"
-        meta   = {
-            "content":   text,
-            "title":     chunk["title"],
+        text = f"{chunk['title']}\n\n{chunk['content']}"
+        meta = {
+            "content": text,
+            "title": chunk["title"],
             "tenant_id": tenant_id,
-            "kb_id":     kb_id,
-            "source":    "seed_kafka_bot",
+            "kb_id": kb_id,
+            "source": "seed_kafka_bot",
         }
         records.append((doc_id, chunk["embedding"], meta))
 
@@ -356,12 +358,12 @@ async def upsert_bot_to_mongo(mongo_url: str, tenant_id: str, kb_id: str):
 
     tls = {"tlsCAFile": certifi.where()} if "mongodb+srv" in mongo_url else {}
     client = AsyncIOMotorClient(mongo_url, **tls)
-    db     = client["CustomerProfile"]
-    col    = db["customerService"]
+    db = client["CustomerProfile"]
+    col = db["customerService"]
 
     bot_doc = {
-        "id":          BOT_ID,
-        "name":        "Kafka Performance Bot",
+        "id": BOT_ID,
+        "name": "Kafka Performance Bot",
         "description": "Analyses resilience test metrics and recommends Kafka tuning fixes.",
         "kbs": [{"id": kb_id, "name": "kafka-best-practices"}],
         "prompt_config": {
@@ -389,10 +391,12 @@ async def upsert_bot_to_mongo(mongo_url: str, tenant_id: str, kb_id: str):
         )
         print(f"  Updated existing tenant {tenant_id!r} — bot upserted.")
     else:
-        await col.insert_one({
-            "tenant_id": tenant_id,
-            "bots":      [bot_doc],
-        })
+        await col.insert_one(
+            {
+                "tenant_id": tenant_id,
+                "bots": [bot_doc],
+            }
+        )
         print(f"  Created tenant {tenant_id!r} with kafka-performance-bot.")
 
     client.close()
@@ -415,7 +419,8 @@ async def main():
     # 1. Embed
     print("Step 1 — Embedding knowledge chunks via Gemini...")
     embedded = await embed_chunks(
-        KNOWLEDGE_CHUNKS, settings.gemini_api_key.get_secret_value(),
+        KNOWLEDGE_CHUNKS,
+        settings.gemini_api_key.get_secret_value(),
     )
 
     # 2. Upsert to pgvector
@@ -430,12 +435,14 @@ async def main():
     # 3. Register bot in MongoDB
     print("\nStep 3 — Registering bot in MongoDB...")
     await upsert_bot_to_mongo(
-        settings.mongodb_url.get_secret_value(), tenant_id, kb_id,
+        settings.mongodb_url.get_secret_value(),
+        tenant_id,
+        kb_id,
     )
 
     print("\n✓ Done. kafka-performance-bot provisioned with Kafka KB.")
-    print(f"  KB collection: shielva_kb_{tenant_id.replace('-','_')}_{kb_id.replace('-','_')}")
-    print(f"  Run a resilience test to verify AI analysis uses the KB context.")
+    print(f"  KB collection: shielva_kb_{tenant_id.replace('-', '_')}_{kb_id.replace('-', '_')}")
+    print("  Run a resilience test to verify AI analysis uses the KB context.")
 
 
 if __name__ == "__main__":

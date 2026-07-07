@@ -11,6 +11,7 @@ single SSE event after the underlying call completes (no token-by-
 token streaming). That behaviour is preserved here — true streaming
 arrives when the LLM provider port grows a streaming variant.
 """
+
 from __future__ import annotations
 
 import os
@@ -20,10 +21,10 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 from src.application.chat import HandleQueryInput, HandleQueryUseCase
+from src.infrastructure.entitlements import require_llm_entitlement
 from src.protocol.models import MCPQueryRequest, MCPQueryResponse, Source, ToolCall
 
 from ._deps import get_domain_tenant
-from src.infrastructure.entitlements import require_llm_entitlement
 
 logger = structlog.get_logger(__name__)
 
@@ -50,28 +51,28 @@ def _use_case(request: Request) -> HandleQueryUseCase:
     dependencies=[Depends(require_llm_entitlement)],
 )
 async def process_query(
-    request:        Request,
-    body:           MCPQueryRequest,
+    request: Request,
+    body: MCPQueryRequest,
     tenant=Depends(get_domain_tenant),
 ) -> MCPQueryResponse:
     use_case = _use_case(request)
     try:
         out = await use_case.execute(
             input_=HandleQueryInput(
-                query         = body.query,
-                bot_id        = body.bot_id,
-                session_id    = body.session_id,
-                stream        = body.stream,
-                context       = body.context,
-                tool_options  = body.tool_options,
-                custom_prompt = body.custom_prompt,
-                model         = body.model,
+                query=body.query,
+                bot_id=body.bot_id,
+                session_id=body.session_id,
+                stream=body.stream,
+                context=body.context,
+                tool_options=body.tool_options,
+                custom_prompt=body.custom_prompt,
+                model=body.model,
             ),
             tenant=tenant,
         )
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e))
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.error("query_processing_failed", error=str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -79,14 +80,14 @@ async def process_query(
     # response model. Slice 4c could expose a fully application-typed
     # response so this translation goes away.
     return MCPQueryResponse(
-        query_id    = out.query_id,
-        answer      = out.answer,
-        sources     = [Source(**s) for s in out.sources],
-        tool_calls  = [ToolCall(**t) for t in out.tool_calls],
-        tokens_used = out.tokens_used,
-        latency_ms  = out.latency_ms,
-        model       = out.model,
-        session_id  = out.session_id,
+        query_id=out.query_id,
+        answer=out.answer,
+        sources=[Source(**s) for s in out.sources],
+        tool_calls=[ToolCall(**t) for t in out.tool_calls],
+        tokens_used=out.tokens_used,
+        latency_ms=out.latency_ms,
+        model=out.model,
+        session_id=out.session_id,
     )
 
 
@@ -95,8 +96,8 @@ async def process_query(
     dependencies=[Depends(require_llm_entitlement)],
 )
 async def process_query_stream(
-    request:        Request,
-    body:           MCPQueryRequest,
+    request: Request,
+    body: MCPQueryRequest,
     tenant=Depends(get_domain_tenant),
 ):
     """Streaming variant. Today the final answer is emitted as one
@@ -109,18 +110,18 @@ async def process_query_stream(
         try:
             out = await use_case.execute(
                 input_=HandleQueryInput(
-                    query         = body.query,
-                    bot_id        = body.bot_id,
-                    session_id    = body.session_id,
-                    stream        = True,
-                    context       = body.context,
-                    tool_options  = body.tool_options,
-                    custom_prompt = body.custom_prompt,
+                    query=body.query,
+                    bot_id=body.bot_id,
+                    session_id=body.session_id,
+                    stream=True,
+                    context=body.context,
+                    tool_options=body.tool_options,
+                    custom_prompt=body.custom_prompt,
                 ),
                 tenant=tenant,
             )
             yield out.answer
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             yield f"Error: {e}"
 
     return StreamingResponse(generate(), media_type="text/event-stream")

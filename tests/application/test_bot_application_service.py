@@ -1,7 +1,6 @@
 """BotApplicationService — get/list/render_prompt with a fake repo."""
-from __future__ import annotations
 
-from typing import Dict, List, Optional
+from __future__ import annotations
 
 import pytest
 
@@ -10,22 +9,25 @@ from src.domain.bots.entities import Bot
 from src.domain.bots.errors import BotNotFoundError
 from src.domain.bots.repositories import BotRepository
 from src.domain.bots.value_objects import (
-    BotId, BotName, BotStatus, PromptTemplate,
+    BotId,
+    BotName,
+    BotStatus,
+    PromptTemplate,
 )
 from src.domain.shared.tenant import TenantContext
 
 
 class _FakeRepo(BotRepository):
-    def __init__(self, bots: List[Bot]) -> None:
-        self._bots: Dict[str, Bot] = {str(b.id): b for b in bots}
+    def __init__(self, bots: list[Bot]) -> None:
+        self._bots: dict[str, Bot] = {str(b.id): b for b in bots}
 
-    async def get(self, bot_id: BotId, *, tenant: TenantContext) -> Optional[Bot]:
+    async def get(self, bot_id: BotId, *, tenant: TenantContext) -> Bot | None:
         b = self._bots.get(str(bot_id))
         if b is None or b.tenant_id != tenant.tenant_id:
             return None
         return b
 
-    async def list_for_tenant(self, *, tenant: TenantContext) -> List[Bot]:
+    async def list_for_tenant(self, *, tenant: TenantContext) -> list[Bot]:
         return [b for b in self._bots.values() if b.tenant_id == tenant.tenant_id]
 
     async def save(self, bot: Bot) -> None:
@@ -34,12 +36,12 @@ class _FakeRepo(BotRepository):
 
 def _bot(bot_id: str, tenant_id: str, prompt: str) -> Bot:
     return Bot(
-        id              = BotId(bot_id),
-        tenant_id       = tenant_id,
-        name            = BotName(f"Bot {bot_id}"),
-        description     = f"desc {bot_id}",
-        status          = BotStatus.ACTIVE,
-        prompt_template = PromptTemplate(text=prompt),
+        id=BotId(bot_id),
+        tenant_id=tenant_id,
+        name=BotName(f"Bot {bot_id}"),
+        description=f"desc {bot_id}",
+        status=BotStatus.ACTIVE,
+        prompt_template=PromptTemplate(text=prompt),
     )
 
 
@@ -74,11 +76,15 @@ async def test_get_bot_foreign_tenant_raises_not_found():
 
 @pytest.mark.asyncio
 async def test_list_bots_returns_tenant_bots_only():
-    svc = BotApplicationService(repository=_FakeRepo([
-        _bot("b1", "alice", ""),
-        _bot("b2", "alice", ""),
-        _bot("b3", "bob",   ""),
-    ]))
+    svc = BotApplicationService(
+        repository=_FakeRepo(
+            [
+                _bot("b1", "alice", ""),
+                _bot("b2", "alice", ""),
+                _bot("b3", "bob", ""),
+            ]
+        )
+    )
     alice_bots = await svc.list_bots(tenant=_tenant("alice"))
     assert sorted(str(b.id) for b in alice_bots) == ["b1", "b2"]
 
@@ -89,7 +95,9 @@ async def test_render_prompt_substitutes_arguments():
         repository=_FakeRepo([_bot("b1", "t1", "Hi {{name}}!")]),
     )
     rendered = await svc.render_prompt(
-        bot_id="b1", tenant=_tenant(), arguments={"name": "Vivek"},
+        bot_id="b1",
+        tenant=_tenant(),
+        arguments={"name": "Vivek"},
     )
     assert rendered == "Hi Vivek!"
 
@@ -102,6 +110,8 @@ async def test_render_prompt_leaves_unknown_vars_intact():
         repository=_FakeRepo([_bot("b1", "t1", "Hi {{name}}, role {{role}}")]),
     )
     rendered = await svc.render_prompt(
-        bot_id="b1", tenant=_tenant(), arguments={"name": "Vivek"},
+        bot_id="b1",
+        tenant=_tenant(),
+        arguments={"name": "Vivek"},
     )
     assert rendered == "Hi Vivek, role {{role}}"

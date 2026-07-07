@@ -10,16 +10,20 @@ defensively.
 A native Mongo adapter (without going through the legacy registry)
 lands in slice 4b — at that point this wrapper goes away.
 """
+
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import structlog
 
 from src.domain.bots.entities import Bot
 from src.domain.bots.repositories import BotRepository
 from src.domain.bots.value_objects import (
-    BotId, BotName, BotStatus, PromptTemplate,
+    BotId,
+    BotName,
+    BotStatus,
+    PromptTemplate,
 )
 from src.domain.shared.tenant import TenantContext
 
@@ -30,13 +34,15 @@ class LegacyBotRepositoryAdapter(BotRepository):
     def __init__(self, legacy_registry: Any) -> None:
         self._reg = legacy_registry
 
-    async def get(self, bot_id: BotId, *, tenant: TenantContext) -> Optional[Bot]:
+    async def get(self, bot_id: BotId, *, tenant: TenantContext) -> Bot | None:
         try:
             raw = await self._reg.get_bot(str(bot_id), tenant.tenant_id)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning(
                 "bot_registry.get_bot failed",
-                bot_id=str(bot_id), tenant_id=tenant.tenant_id, error=str(e),
+                bot_id=str(bot_id),
+                tenant_id=tenant.tenant_id,
+                error=str(e),
             )
             return None
         if not raw:
@@ -47,7 +53,7 @@ class LegacyBotRepositoryAdapter(BotRepository):
         # behaviour as before this adapter existed.
         return _to_domain(raw, tenant_id=tenant.tenant_id)
 
-    async def list_for_tenant(self, *, tenant: TenantContext) -> List[Bot]:
+    async def list_for_tenant(self, *, tenant: TenantContext) -> list[Bot]:
         # The legacy registry has no tenant-wide listing — it's
         # bot-by-id. Mongo path could enumerate the customer's
         # ``bots`` array, but the registry doesn't expose that
@@ -73,7 +79,8 @@ class LegacyBotRepositoryAdapter(BotRepository):
 
 # ── helpers ────────────────────────────────────────────────────────
 
-def _to_domain(raw: Dict[str, Any], *, tenant_id: str) -> Bot:
+
+def _to_domain(raw: dict[str, Any], *, tenant_id: str) -> Bot:
     """Translate the legacy bot dict into a :class:`Bot`.
 
     Defensive on missing fields — the legacy mock + the Mongo
@@ -83,39 +90,31 @@ def _to_domain(raw: Dict[str, Any], *, tenant_id: str) -> Bot:
     prompt_text = ""
     prompt_config = raw.get("prompt_config") or {}
     if isinstance(prompt_config, dict):
-        prompt_text = str(
-            prompt_config.get("system_prompt")
-            or prompt_config.get("custom_prompt")
-            or ""
-        )
+        prompt_text = str(prompt_config.get("system_prompt") or prompt_config.get("custom_prompt") or "")
     if not prompt_text:
         prompt_text = str(raw.get("custom_prompt") or "")
 
-    kb_ids: tuple[str, ...] = tuple()
+    kb_ids: tuple[str, ...] = ()
     raw_kbs = raw.get("kb_ids") or raw.get("kbs") or []
     if isinstance(raw_kbs, list):
-        kb_ids = tuple(
-            str(k.get("id") if isinstance(k, dict) else k)
-            for k in raw_kbs
-            if k
-        )
+        kb_ids = tuple(str(k.get("id") if isinstance(k, dict) else k) for k in raw_kbs if k)
 
-    model_settings: Dict[str, str] = {}
+    model_settings: dict[str, str] = {}
     model_cfg = raw.get("model_config") or {}
     if isinstance(model_cfg, dict):
         for k, v in model_cfg.items():
             model_settings[str(k)] = str(v)
 
     return Bot(
-        id              = BotId(str(raw.get("id") or raw.get("bot_id") or "")),
-        tenant_id       = tenant_id,
-        name            = BotName(str(raw.get("name") or "")),
-        description     = str(raw.get("description") or ""),
-        status          = _parse_status(raw.get("status")),
-        prompt_template = PromptTemplate(text=prompt_text),
-        kb_ids          = kb_ids,
-        tool_whitelist  = tuple(str(t) for t in (raw.get("tools") or ())),
-        model_settings  = model_settings,
+        id=BotId(str(raw.get("id") or raw.get("bot_id") or "")),
+        tenant_id=tenant_id,
+        name=BotName(str(raw.get("name") or "")),
+        description=str(raw.get("description") or ""),
+        status=_parse_status(raw.get("status")),
+        prompt_template=PromptTemplate(text=prompt_text),
+        kb_ids=kb_ids,
+        tool_whitelist=tuple(str(t) for t in (raw.get("tools") or ())),
+        model_settings=model_settings,
     )
 
 

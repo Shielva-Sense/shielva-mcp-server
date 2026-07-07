@@ -16,12 +16,12 @@ This route is single-shot text-in / text-out. For caller-driven tool
 calling, use ``POST /mcp/v1/chat/complete`` instead — the codegen
 endpoint stays scoped to its integration-builder use case.
 """
+
 from __future__ import annotations
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
-from typing import Dict, List, Optional
 
 from src.protocol.models import TenantContext
 
@@ -32,10 +32,11 @@ codegen_router = APIRouter(prefix="/mcp/v1/codegen", tags=["codegen-internal"])
 
 # ── Request / Response models ─────────────────────────────────────────
 
+
 class CodegenCompleteRequest(BaseModel):
     """Request body for code-generation completion."""
 
-    messages: List[Dict[str, str]]
+    messages: list[dict[str, str]]
     """OpenAI-format message list, e.g. [{"role": "user", "content": "..."}]."""
 
     system: str = ""
@@ -43,7 +44,7 @@ class CodegenCompleteRequest(BaseModel):
 
     max_tokens: int = 8192
     temperature: float = 0.3
-    model: Optional[str] = None
+    model: str | None = None
     """Optional model override, e.g. 'gemini/gemini-2.5-pro'. Defaults to MCP's configured model."""
 
 
@@ -61,6 +62,7 @@ class CodegenCompleteResponse(BaseModel):
 
 
 # ── Dependency: lightweight tenant extraction ─────────────────────────
+
 
 def _extract_tenant(request: Request) -> TenantContext:
     """
@@ -85,6 +87,7 @@ def _extract_tenant(request: Request) -> TenantContext:
 
 # ── Route ─────────────────────────────────────────────────────────────
 
+
 @codegen_router.post("/complete", response_model=CodegenCompleteResponse)
 async def codegen_complete(
     body: CodegenCompleteRequest,
@@ -105,14 +108,11 @@ async def codegen_complete(
     if llm_router is None:
         raise HTTPException(
             status_code=503,
-            detail=(
-                "MCP LLM router is not yet initialized. "
-                "The MCP server may still be starting up."
-            ),
+            detail=("MCP LLM router is not yet initialized. The MCP server may still be starting up."),
         )
 
     # Build the messages list: system prompt first (if any), then conversation turns
-    msgs: List[Dict[str, str]] = []
+    msgs: list[dict[str, str]] = []
     if body.system:
         msgs.append({"role": "system", "content": body.system})
     msgs.extend(body.messages)
@@ -129,10 +129,10 @@ async def codegen_complete(
     try:
         response = await llm_router.execute(
             messages=msgs,
-            tools=None,          # No tool-calling for direct codegen
+            tools=None,  # No tool-calling for direct codegen
             tenant_context=tenant_context,
             stream=False,
-            model=body.model,    # None → uses MCP's configured default model
+            model=body.model,  # None → uses MCP's configured default model
         )
     except Exception as exc:
         logger.error(
@@ -161,6 +161,7 @@ async def codegen_complete(
 
 # ── Fix-Agent endpoint (uses MCP tool-calling loop) ───────────────────
 
+
 class CodegenFixAgentRequest(BaseModel):
     """Request body for agent-driven code fix."""
 
@@ -181,7 +182,7 @@ class CodegenFixAgentRequest(BaseModel):
 
     max_tokens: int = 16384
     temperature: float = 0.2
-    model: Optional[str] = None
+    model: str | None = None
 
 
 class CodegenFixAgentResponse(BaseModel):
@@ -191,7 +192,7 @@ class CodegenFixAgentResponse(BaseModel):
     fix_explanation: str = ""
     """Brief explanation of what was fixed."""
 
-    tools_called: List[str] = []
+    tools_called: list[str] = []
     """Names of MCP tools called during the fix cycle."""
 
     model: str = ""
@@ -253,19 +254,20 @@ async def codegen_fix_agent(
     )
     messages = (
         LLMMessage(role=MessageRole.SYSTEM, content=system),
-        LLMMessage(role=MessageRole.USER,   content=user_message),
+        LLMMessage(role=MessageRole.USER, content=user_message),
     )
 
     # Build the OpenAI tool schemas for just the codegen tools.
     # We translate from the new domain Tool entities so the loop sees
     # exactly what the catalogue reports — no parallel filtering.
     from src.domain.shared.tenant import TenantContext as DomainTenant
+
     domain_tenant = DomainTenant(
-        tenant_id   = tenant_context.tenant_id,
-        user_id     = tenant_context.user_id,
-        user_email  = tenant_context.user_email,
-        role        = tenant_context.role,
-        permissions = tuple(tenant_context.permissions or ()),
+        tenant_id=tenant_context.tenant_id,
+        user_id=tenant_context.user_id,
+        user_email=tenant_context.user_email,
+        role=tenant_context.role,
+        permissions=tuple(tenant_context.permissions or ()),
     )
     all_tools = await tool_svc.list_tools(tenant=domain_tenant)
     codegen_tools = [t for t in all_tools if str(t.name) in _CODEGEN_TOOL_NAMES]
@@ -273,9 +275,9 @@ async def codegen_fix_agent(
         {
             "type": "function",
             "function": {
-                "name":        str(t.name),
+                "name": str(t.name),
                 "description": t.description,
-                "parameters":  t.input_schema.json_schema,
+                "parameters": t.input_schema.json_schema,
             },
         }
         for t in codegen_tools
@@ -291,22 +293,24 @@ async def codegen_fix_agent(
     )
 
     from src.application.llm import ToolLoopInput
+
     try:
         result = await use_case.execute(
-            input_ = ToolLoopInput(
-                messages       = messages,
-                tools          = tool_schemas,
-                model          = ModelId(body.model) if body.model else None,
-                max_tokens     = body.max_tokens,
-                temperature    = body.temperature,
-                max_iterations = 5,
+            input_=ToolLoopInput(
+                messages=messages,
+                tools=tool_schemas,
+                model=ModelId(body.model) if body.model else None,
+                max_tokens=body.max_tokens,
+                temperature=body.temperature,
+                max_iterations=5,
             ),
-            tenant = domain_tenant,
+            tenant=domain_tenant,
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.error(
             "codegen.fix_agent_failed",
-            error=str(exc), tenant_id=tenant_context.tenant_id,
+            error=str(exc),
+            tenant_id=tenant_context.tenant_id,
         )
         raise HTTPException(
             status_code=500,
@@ -337,11 +341,9 @@ async def codegen_fix_agent(
     )
 
     return CodegenFixAgentResponse(
-        fixed_code      = fixed_code,
-        fix_explanation = (
-            f"Fixed via MCP agent (tools used: {', '.join(tools_called) or 'none'})"
-        ),
-        tools_called    = tools_called,
-        model           = str(result.model),
-        tokens_used     = result.tokens_used,
+        fixed_code=fixed_code,
+        fix_explanation=(f"Fixed via MCP agent (tools used: {', '.join(tools_called) or 'none'})"),
+        tools_called=tools_called,
+        model=str(result.model),
+        tokens_used=result.tokens_used,
     )

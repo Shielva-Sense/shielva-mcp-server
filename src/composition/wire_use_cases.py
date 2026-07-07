@@ -14,6 +14,7 @@ Why a single ``wire_use_cases`` function (vs per-context functions):
     infrastructure it wraps. The function is long but flat — no
     nested calls, no clever indirection.
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -24,17 +25,17 @@ logger = structlog.get_logger(__name__)
 
 
 def wire_use_cases(
-    app:                Any,  # FastAPI — typed as Any to avoid framework import at module load
+    app: Any,  # FastAPI — typed as Any to avoid framework import at module load
     *,
-    tool_registry:      Any,
-    kb_registry:        Any,
-    bot_registry:       Any,
-    policy_engine:      Any,
-    message_handler:    Any,
-    llm_router:         Any,
-    embedding_client:   Any,
-    vector_store:       Any,
-    rag_client:         Any,
+    tool_registry: Any,
+    kb_registry: Any,
+    bot_registry: Any,
+    policy_engine: Any,
+    message_handler: Any,
+    llm_router: Any,
+    embedding_client: Any,
+    vector_store: Any,
+    rag_client: Any,
 ) -> None:
     """Wire the DDD/hexagonal layer onto a running FastAPI app.
 
@@ -44,62 +45,66 @@ def wire_use_cases(
     the final state of each registry.
     """
     # ── Slice 2: tools ──────────────────────────────────────────
-    from src.application.tools          import ToolApplicationService
-    from src.infrastructure.tools       import LegacyToolRegistryAdapter
+    from src.application.tools import ToolApplicationService
+    from src.infrastructure.tools import LegacyToolRegistryAdapter
+
     tool_adapter = LegacyToolRegistryAdapter(tool_registry)
     app.state.tool_app_service = ToolApplicationService(
-        catalogue = tool_adapter,
-        executor  = tool_adapter,
+        catalogue=tool_adapter,
+        executor=tool_adapter,
     )
 
     # ── Slice 3: knowledge + LLM ────────────────────────────────
-    from src.application.knowledge     import KnowledgeApplicationService
-    from src.application.llm           import LLMApplicationService
-    from src.infrastructure.llm        import LiteLLMProviderAdapter
+    from src.application.knowledge import KnowledgeApplicationService
+    from src.application.llm import LLMApplicationService
+    from src.infrastructure.llm import LiteLLMProviderAdapter
     from src.infrastructure.persistence import LegacyKBRepositoryAdapter
-    from src.infrastructure.retrieval  import (
+    from src.infrastructure.retrieval import (
         LegacyEmbeddingClientAdapter,
         LegacyHybridRetrieverAdapter,
         PgVectorStoreAdapter,
     )
+
     embedding_client_port = LegacyEmbeddingClientAdapter(embedding_client)
-    vector_store_port     = PgVectorStoreAdapter(vector_store)
-    retriever_port        = LegacyHybridRetrieverAdapter(rag_client)
-    kb_repository_port    = LegacyKBRepositoryAdapter(kb_registry)
-    llm_provider_port     = LiteLLMProviderAdapter(llm_router)
+    vector_store_port = PgVectorStoreAdapter(vector_store)
+    retriever_port = LegacyHybridRetrieverAdapter(rag_client)
+    kb_repository_port = LegacyKBRepositoryAdapter(kb_registry)
+    llm_provider_port = LiteLLMProviderAdapter(llm_router)
 
     app.state.knowledge_app_service = KnowledgeApplicationService(
-        kb_repository    = kb_repository_port,
-        retriever        = retriever_port,
-        embedding_client = embedding_client_port,
+        kb_repository=kb_repository_port,
+        retriever=retriever_port,
+        embedding_client=embedding_client_port,
     )
     app.state.llm_app_service = LLMApplicationService(
-        provider = llm_provider_port,
+        provider=llm_provider_port,
     )
     # Raw ports — exposed so slice 4c+ callers can use the typed
     # adapter directly instead of touching app.state.<legacy>.
     app.state.embedding_client_port = embedding_client_port
-    app.state.vector_store_port     = vector_store_port
-    app.state.retriever_port        = retriever_port
-    app.state.kb_repository_port    = kb_repository_port
-    app.state.llm_provider_port     = llm_provider_port
+    app.state.vector_store_port = vector_store_port
+    app.state.retriever_port = retriever_port
+    app.state.kb_repository_port = kb_repository_port
+    app.state.llm_provider_port = llm_provider_port
 
     # ── Slice 4a: bots + policy ─────────────────────────────────
-    from src.application.bots          import BotApplicationService
-    from src.application.policy        import PolicyApplicationService
+    from src.application.bots import BotApplicationService
+    from src.application.policy import PolicyApplicationService
     from src.infrastructure.persistence import LegacyBotRepositoryAdapter
-    from src.infrastructure.policy     import OPAPolicyEngineAdapter
+    from src.infrastructure.policy import OPAPolicyEngineAdapter
+
     bot_repository_port = LegacyBotRepositoryAdapter(bot_registry)
-    policy_engine_port  = OPAPolicyEngineAdapter(policy_engine)
-    app.state.bot_app_service    = BotApplicationService(repository=bot_repository_port)
+    policy_engine_port = OPAPolicyEngineAdapter(policy_engine)
+    app.state.bot_app_service = BotApplicationService(repository=bot_repository_port)
     app.state.policy_app_service = PolicyApplicationService(engine=policy_engine_port)
     app.state.bot_repository_port = bot_repository_port
-    app.state.policy_engine_port  = policy_engine_port
+    app.state.policy_engine_port = policy_engine_port
 
     # ── Slice 4b: HandleQuery use case ──────────────────────────
-    from src.application.chat          import HandleQueryUseCase
+    from src.application.chat import HandleQueryUseCase
+
     app.state.handle_query_use_case = HandleQueryUseCase(
-        legacy_message_handler = message_handler,
+        legacy_message_handler=message_handler,
     )
 
     # ── Slice 4c: generic LLM tool-calling loop ─────────────────
@@ -108,10 +113,11 @@ def wire_use_cases(
     # llm_router.execute() directly; future HandleQuery
     # decomposition consumes the same loop.
     from src.application.llm import CompleteWithToolLoopUseCase
+
     app.state.complete_with_tool_loop_use_case = CompleteWithToolLoopUseCase(
-        provider  = llm_provider_port,
-        catalogue = tool_adapter,
-        executor  = tool_adapter,
+        provider=llm_provider_port,
+        catalogue=tool_adapter,
+        executor=tool_adapter,
     )
 
     logger.info(

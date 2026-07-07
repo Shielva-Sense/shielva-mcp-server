@@ -1,4 +1,5 @@
 """Chat-context domain errors."""
+
 from __future__ import annotations
 
 from ..shared.errors import ConflictError, NotFoundError

@@ -4,6 +4,7 @@ shielva-mcp is the single point every LLM call flows through, so it is the
 correct (and only) place to enforce per-tenant subscription entitlements for
 LLM features. See ``guard.py``.
 """
+
 from .guard import (
     EntitlementGuard,
     get_entitlement_guard,

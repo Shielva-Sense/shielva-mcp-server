@@ -1,8 +1,8 @@
 """Tool entity — the catalogue-level record for one named tool."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Tuple
 
 from ..shared.tenant import TenantContext
 from .value_objects import ToolName, ToolSchema
@@ -17,11 +17,12 @@ class Tool:
     use case (and would also need ``notifications/tools/list_changed``
     which the spec defines for exactly this case).
     """
-    name:                 ToolName
-    description:          str
-    input_schema:         ToolSchema
-    required_permissions: Tuple[str, ...] = field(default_factory=tuple)
-    enabled_by_default:   bool            = True
+
+    name: ToolName
+    description: str
+    input_schema: ToolSchema
+    required_permissions: tuple[str, ...] = field(default_factory=tuple)
+    enabled_by_default: bool = True
 
     def is_permitted_for(self, tenant: TenantContext) -> bool:
         """A tool is permitted when the calling tenant has every

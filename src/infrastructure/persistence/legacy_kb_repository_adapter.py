@@ -16,9 +16,8 @@ a full KB metadata layer. The MCP JSON-RPC ``resources/list`` path
 calls this adapter; with an empty registry it returns ``[]`` (which
 is exactly what the spec smoke validates).
 """
-from __future__ import annotations
 
-from typing import List, Optional
+from __future__ import annotations
 
 import structlog
 
@@ -34,25 +33,22 @@ class LegacyKBRepositoryAdapter(KBRepository):
     def __init__(self, legacy_registry) -> None:
         self._reg = legacy_registry
 
-    async def get(self, kb_id: KBId, *, tenant: TenantContext
-                  ) -> Optional[KnowledgeBase]:
+    async def get(self, kb_id: KBId, *, tenant: TenantContext) -> KnowledgeBase | None:
         for kb in await self.list_for_tenant(tenant=tenant):
             if kb.id == kb_id:
                 return kb
         return None
 
-    async def list_for_tenant(self, *, tenant: TenantContext
-                              ) -> List[KnowledgeBase]:
+    async def list_for_tenant(self, *, tenant: TenantContext) -> list[KnowledgeBase]:
         raw = await _scan_legacy_store(self._reg, tenant.tenant_id)
         return [_to_domain(r, tenant.tenant_id) for r in raw]
 
-    async def list_for_bot(self, *, bot_id: str, tenant: TenantContext
-                           ) -> List[KnowledgeBase]:
+    async def list_for_bot(self, *, bot_id: str, tenant: TenantContext) -> list[KnowledgeBase]:
         # Legacy registry's per-bot accessor returns dicts in the
         # same shape; just route through it.
         try:
             raw = await self._reg.get_kbs_for_bot(bot_id, tenant.tenant_id)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning("kb_registry.get_kbs_for_bot failed", error=str(e))
             raw = []
         return [_to_domain(r, tenant.tenant_id, bot_id=bot_id) for r in (raw or [])]
@@ -70,6 +66,7 @@ class LegacyKBRepositoryAdapter(KBRepository):
 
 
 # ── helpers ────────────────────────────────────────────────────────
+
 
 async def _scan_legacy_store(registry, tenant_id: str) -> list:
     """Best-effort tenant-wide scan. Mirrors the legacy bridges in
@@ -95,15 +92,15 @@ async def _scan_legacy_store(registry, tenant_id: str) -> list:
 
 def _to_domain(raw: dict, tenant_id: str, *, bot_id: str = "") -> KnowledgeBase:
     return KnowledgeBase(
-        id          = KBId(str(raw.get("kb_id") or raw.get("id") or "")),
-        tenant_id   = tenant_id,
-        bot_id      = bot_id or str(raw.get("bot_id") or ""),
-        name        = KBName(str(raw.get("name") or raw.get("unique_name") or "")),
-        status      = _parse_status(raw.get("status")),
-        hello_id    = str(raw.get("hello_id") or ""),
-        unique_name = str(raw.get("unique_name") or ""),
-        doc_count   = int(raw.get("doc_count") or raw.get("documents") or 0),
-        metadata    = dict(raw.get("metadata") or {}),
+        id=KBId(str(raw.get("kb_id") or raw.get("id") or "")),
+        tenant_id=tenant_id,
+        bot_id=bot_id or str(raw.get("bot_id") or ""),
+        name=KBName(str(raw.get("name") or raw.get("unique_name") or "")),
+        status=_parse_status(raw.get("status")),
+        hello_id=str(raw.get("hello_id") or ""),
+        unique_name=str(raw.get("unique_name") or ""),
+        doc_count=int(raw.get("doc_count") or raw.get("documents") or 0),
+        metadata=dict(raw.get("metadata") or {}),
     )
 
 

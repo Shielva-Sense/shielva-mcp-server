@@ -6,12 +6,17 @@ Slice 4b adds the RAG-query orchestration use case
 ``POST /mcp/v1/query`` and any future MCP JSON-RPC method that
 needs the full pipeline.
 """
+
 from .handle_query import (
-    HandleQueryInput, HandleQueryOutput, HandleQueryUseCase,
+    HandleQueryInput,
+    HandleQueryOutput,
+    HandleQueryUseCase,
 )
 from .services import ChatApplicationService
 
 __all__ = [
     "ChatApplicationService",
-    "HandleQueryUseCase", "HandleQueryInput", "HandleQueryOutput",
+    "HandleQueryInput",
+    "HandleQueryOutput",
+    "HandleQueryUseCase",
 ]

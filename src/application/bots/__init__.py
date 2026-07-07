@@ -8,6 +8,7 @@
 ProvisionBot + ActivateBot use cases land in slice 4b alongside the
 Mongo-backed BotRepository adapter.
 """
+
 from .services import BotApplicationService
 
 __all__ = ["BotApplicationService"]

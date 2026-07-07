@@ -18,11 +18,12 @@ The transport is built via :func:`build_router` so the composition
 root can inject the :class:`MCPDispatcher` (which itself owns the
 chat application service). No module-level singletons.
 """
+
 from __future__ import annotations
 
 import json
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import structlog
 from fastapi import APIRouter, HTTPException, Request, Response
@@ -33,7 +34,10 @@ from src.domain.shared.tenant import TenantContext
 
 from .dispatcher import MCPDispatcher
 from .errors import (
-    INVALID_REQUEST, INTERNAL_ERROR, JsonRpcException, PARSE_ERROR,
+    INTERNAL_ERROR,
+    INVALID_REQUEST,
+    PARSE_ERROR,
+    JsonRpcException,
 )
 from .types import JsonRpcError, JsonRpcRequest, JsonRpcResponse
 
@@ -41,6 +45,7 @@ logger = structlog.get_logger(__name__)
 
 
 # ── Origin allowlist ─────────────────────────────────────────────────
+
 
 def _allowed_origins() -> set[str]:
     """Comma-separated env. ``*`` disables the check (only valid for
@@ -57,7 +62,7 @@ def _allowed_origins() -> set[str]:
     return {o.strip() for o in raw.split(",") if o.strip()}
 
 
-def _origin_ok(origin: Optional[str], allowed: set[str]) -> bool:
+def _origin_ok(origin: str | None, allowed: set[str]) -> bool:
     if "*" in allowed:
         return True
     if origin is None or origin == "" or origin.lower() == "null":
@@ -69,6 +74,7 @@ def _origin_ok(origin: Optional[str], allowed: set[str]) -> bool:
 
 # ── Tenant extraction ────────────────────────────────────────────────
 
+
 def _tenant_from_request(request: Request) -> TenantContext:
     """Auth is X-Tenant-ID for now. OAuth 2.1 bearer is on the
     GA-readiness backlog."""
@@ -76,24 +82,25 @@ def _tenant_from_request(request: Request) -> TenantContext:
     if not tenant_id:
         raise HTTPException(status_code=401, detail="Missing X-Tenant-ID header")
     return TenantContext(
-        tenant_id   = tenant_id,
-        user_id     = request.headers.get("X-User-ID")     or "mcp-client",
-        user_email  = request.headers.get("X-User-Email")  or "client@shielva.ai",
-        role        = request.headers.get("X-User-Role")   or "Customer_Basic",
-        permissions = tuple(),
+        tenant_id=tenant_id,
+        user_id=request.headers.get("X-User-ID") or "mcp-client",
+        user_email=request.headers.get("X-User-Email") or "client@shielva.ai",
+        role=request.headers.get("X-User-Role") or "Customer_Basic",
+        permissions=(),
     )
 
 
 # ── one request → one response ──────────────────────────────────────
 
+
 async def _run_one(
-    payload: Dict[str, Any],
+    payload: dict[str, Any],
     *,
-    tenant:        TenantContext,
-    session_id_in: Optional[str],
-    app_state:     Any,
-    dispatcher:    MCPDispatcher,
-) -> tuple[Optional[Dict[str, Any]], Optional[str]]:
+    tenant: TenantContext,
+    session_id_in: str | None,
+    app_state: Any,
+    dispatcher: MCPDispatcher,
+) -> tuple[dict[str, Any] | None, str | None]:
     """Dispatch one envelope. Returns
     ``(response_dict_or_None, session_id_for_response)``.
     None on the dict means it was a notification → caller drops it."""
@@ -102,9 +109,8 @@ async def _run_one(
     except Exception as e:
         return (
             JsonRpcResponse(
-                id    = payload.get("id") if isinstance(payload, dict) else None,
-                error = JsonRpcError(code=INVALID_REQUEST,
-                                     message=f"Invalid Request: {e}"),
+                id=payload.get("id") if isinstance(payload, dict) else None,
+                error=JsonRpcError(code=INVALID_REQUEST, message=f"Invalid Request: {e}"),
             ).model_dump(exclude_none=True),
             session_id_in,
         )
@@ -114,8 +120,10 @@ async def _run_one(
     if is_notification:
         try:
             await dispatcher.dispatch_notification(
-                method=req.method, params=req.params,
-                tenant=tenant, session_id=session_id_in,
+                method=req.method,
+                params=req.params,
+                tenant=tenant,
+                session_id=session_id_in,
                 app_state=app_state,
             )
         except Exception:
@@ -125,8 +133,10 @@ async def _run_one(
 
     try:
         result, session_id_out = await dispatcher.dispatch_request(
-            method=req.method, params=req.params,
-            tenant=tenant, session_id=session_id_in,
+            method=req.method,
+            params=req.params,
+            tenant=tenant,
+            session_id=session_id_in,
             app_state=app_state,
         )
     except SessionNotFoundError as e:
@@ -134,11 +144,13 @@ async def _run_one(
         # caller translates to HTTP 404; the JSON-RPC envelope still
         # carries an error so well-behaved clients can read it.
         return (
-            {"__http_status__": 404,
-             **JsonRpcResponse(
-                 id=req.id,
-                 error=JsonRpcError(code=INVALID_REQUEST, message=str(e)),
-             ).model_dump(exclude_none=True)},
+            {
+                "__http_status__": 404,
+                **JsonRpcResponse(
+                    id=req.id,
+                    error=JsonRpcError(code=INVALID_REQUEST, message=str(e)),
+                ).model_dump(exclude_none=True),
+            },
             None,  # drop the session id from the response header
         )
     except SessionStateError as e:
@@ -152,8 +164,8 @@ async def _run_one(
     except JsonRpcException as je:
         return (
             JsonRpcResponse(
-                id    = req.id,
-                error = JsonRpcError(code=je.code, message=je.message, data=je.data),
+                id=req.id,
+                error=JsonRpcError(code=je.code, message=je.message, data=je.data),
             ).model_dump(exclude_none=True),
             session_id_in,
         )
@@ -161,8 +173,8 @@ async def _run_one(
         logger.exception("mcp.dispatch_internal_error", method=req.method)
         return (
             JsonRpcResponse(
-                id    = req.id,
-                error = JsonRpcError(
+                id=req.id,
+                error=JsonRpcError(
                     code=INTERNAL_ERROR,
                     message=f"Internal error: {type(exc).__name__}",
                 ),
@@ -177,6 +189,7 @@ async def _run_one(
 
 
 # ── Router factory ──────────────────────────────────────────────────
+
 
 def build_router(dispatcher: MCPDispatcher) -> APIRouter:
     """Build the FastAPI router that owns ``/mcp``.
@@ -211,7 +224,7 @@ def build_router(dispatcher: MCPDispatcher) -> APIRouter:
         accept = (request.headers.get("accept") or "").lower()
         if accept and accept != "*/*":
             wants_json = "application/json" in accept
-            wants_sse  = "text/event-stream" in accept
+            wants_sse = "text/event-stream" in accept
             if not (wants_json or wants_sse):
                 raise HTTPException(
                     status_code=406,
@@ -244,25 +257,26 @@ def build_router(dispatcher: MCPDispatcher) -> APIRouter:
                 return JSONResponse(
                     status_code=400,
                     content=JsonRpcResponse(
-                        error=JsonRpcError(code=INVALID_REQUEST,
-                                           message="Empty batch"),
+                        error=JsonRpcError(code=INVALID_REQUEST, message="Empty batch"),
                     ).model_dump(exclude_none=True),
                 )
-            responses: List[Dict[str, Any]] = []
+            responses: list[dict[str, Any]] = []
             http_status = 200
             session_out = session_id_in
             for item in body:
                 if not isinstance(item, dict):
                     responses.append(
                         JsonRpcResponse(
-                            error=JsonRpcError(code=INVALID_REQUEST,
-                                               message="Batch item not an object"),
+                            error=JsonRpcError(code=INVALID_REQUEST, message="Batch item not an object"),
                         ).model_dump(exclude_none=True)
                     )
                     continue
                 resp, session_out = await _run_one(
-                    item, tenant=tenant, session_id_in=session_out,
-                    app_state=request.app.state, dispatcher=dispatcher,
+                    item,
+                    tenant=tenant,
+                    session_id_in=session_out,
+                    app_state=request.app.state,
+                    dispatcher=dispatcher,
                 )
                 if resp is None:
                     continue
@@ -275,7 +289,7 @@ def build_router(dispatcher: MCPDispatcher) -> APIRouter:
                 responses.append(resp)
             if not responses:
                 return Response(status_code=202)
-            headers: Dict[str, str] = {}
+            headers: dict[str, str] = {}
             if session_out and http_status == 200:
                 headers["Mcp-Session-Id"] = session_out
             return JSONResponse(content=responses, headers=headers, status_code=http_status)
@@ -285,8 +299,7 @@ def build_router(dispatcher: MCPDispatcher) -> APIRouter:
             return JSONResponse(
                 status_code=400,
                 content=JsonRpcResponse(
-                    error=JsonRpcError(code=INVALID_REQUEST,
-                                       message="Body must be object or array"),
+                    error=JsonRpcError(code=INVALID_REQUEST, message="Body must be object or array"),
                 ).model_dump(exclude_none=True),
             )
 
@@ -294,8 +307,11 @@ def build_router(dispatcher: MCPDispatcher) -> APIRouter:
         # initialize, non-ping request. Detect early — saves a
         # round-trip through the dispatcher.
         method = body.get("method") or ""
-        if not session_id_in and method not in ("initialize", "ping",
-                                                "notifications/initialized"):
+        if not session_id_in and method not in (
+            "initialize",
+            "ping",
+            "notifications/initialized",
+        ):
             return JSONResponse(
                 status_code=400,
                 content=JsonRpcResponse(
@@ -308,8 +324,11 @@ def build_router(dispatcher: MCPDispatcher) -> APIRouter:
             )
 
         resp, session_out = await _run_one(
-            body, tenant=tenant, session_id_in=session_id_in,
-            app_state=request.app.state, dispatcher=dispatcher,
+            body,
+            tenant=tenant,
+            session_id_in=session_id_in,
+            app_state=request.app.state,
+            dispatcher=dispatcher,
         )
         if resp is None:
             # Notification — spec says 202.
@@ -320,7 +339,7 @@ def build_router(dispatcher: MCPDispatcher) -> APIRouter:
             resp.pop("__http_status__", None)
             return JSONResponse(content=resp, status_code=404)
 
-        headers: Dict[str, str] = {}
+        headers: dict[str, str] = {}
         if session_out:
             headers["Mcp-Session-Id"] = session_out
         return JSONResponse(content=resp, headers=headers)
@@ -339,7 +358,8 @@ def build_router(dispatcher: MCPDispatcher) -> APIRouter:
             )
         # Idempotent close — no error if already gone.
         from src.domain.chat.value_objects import SessionId
-        chat = dispatcher._chat  # noqa: SLF001 — same package, allowed
+
+        chat = dispatcher._chat
         await chat.close(session_id=SessionId(session_id), tenant=tenant)
         return Response(status_code=204)
 

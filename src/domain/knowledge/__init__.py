@@ -19,21 +19,43 @@ Plus one composite read port:
                                   (dense-only, BM25-only, hybrid+rerank) are
                                   swappable.
 """
+
 from .entities import KnowledgeBase
 from .errors import KnowledgeBaseNotFoundError
 from .repositories import (
-    EmbeddingClient, KBRepository, Retriever, VectorStore,
+    EmbeddingClient,
+    KBRepository,
+    Retriever,
+    VectorStore,
 )
 from .value_objects import (
-    Chunk, ChunkId, Document, DocumentId, KBId, KBName, KBStatus,
-    RetrievalQuery, RetrievedChunk, Source,
+    Chunk,
+    ChunkId,
+    Document,
+    DocumentId,
+    KBId,
+    KBName,
+    KBStatus,
+    RetrievalQuery,
+    RetrievedChunk,
+    Source,
 )
 
 __all__ = [
+    "Chunk",
+    "ChunkId",
+    "Document",
+    "DocumentId",
+    "EmbeddingClient",
+    "KBId",
+    "KBName",
+    "KBRepository",
+    "KBStatus",
     "KnowledgeBase",
-    "KBId", "KBName", "KBStatus",
-    "DocumentId", "Document",
-    "ChunkId", "Chunk", "RetrievedChunk", "RetrievalQuery", "Source",
-    "KBRepository", "VectorStore", "EmbeddingClient", "Retriever",
     "KnowledgeBaseNotFoundError",
+    "RetrievalQuery",
+    "RetrievedChunk",
+    "Retriever",
+    "Source",
+    "VectorStore",
 ]

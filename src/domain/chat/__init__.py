@@ -10,16 +10,24 @@ Public surface:
     Ports         : ChatSessionRepository
     Errors        : SessionNotFoundError, SessionStateError
 """
+
 from .entities import Session
 from .errors import SessionNotFoundError, SessionStateError
 from .repositories import ChatSessionRepository
 from .value_objects import (
-    ClientInfo, ProtocolVersion, SessionId, SessionState,
+    ClientInfo,
+    ProtocolVersion,
+    SessionId,
+    SessionState,
 )
 
 __all__ = [
-    "Session",
-    "SessionId", "SessionState", "ProtocolVersion", "ClientInfo",
     "ChatSessionRepository",
-    "SessionNotFoundError", "SessionStateError",
+    "ClientInfo",
+    "ProtocolVersion",
+    "Session",
+    "SessionId",
+    "SessionNotFoundError",
+    "SessionState",
+    "SessionStateError",
 ]

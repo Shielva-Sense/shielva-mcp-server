@@ -5,36 +5,39 @@ may implement multiple ports (Supabase backs both VectorStore and
 EmbeddingClient via its own pipeline) but the domain contracts are
 independent.
 """
+
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import List, Optional, Tuple
 
 from ..shared.tenant import TenantContext
 from .entities import KnowledgeBase
 from .value_objects import (
-    Chunk, ChunkId, KBId, RetrievalQuery, RetrievedChunk,
+    Chunk,
+    ChunkId,
+    KBId,
+    RetrievalQuery,
+    RetrievedChunk,
 )
 
-
 # ── KB metadata ───────────────────────────────────────────────────
+
 
 class KBRepository(ABC):
     """KB CRUD + per-tenant listings. Holds metadata, NOT vectors."""
 
     @abstractmethod
-    async def get(self, kb_id: KBId, *, tenant: TenantContext) -> Optional[KnowledgeBase]:
+    async def get(self, kb_id: KBId, *, tenant: TenantContext) -> KnowledgeBase | None:
         """Tenant-scoped lookup. Returns None when KB doesn't exist
         OR belongs to another tenant — never raise to avoid leaking
         existence."""
 
     @abstractmethod
-    async def list_for_tenant(self, *, tenant: TenantContext) -> List[KnowledgeBase]:
+    async def list_for_tenant(self, *, tenant: TenantContext) -> list[KnowledgeBase]:
         """All KBs the tenant owns."""
 
     @abstractmethod
-    async def list_for_bot(self, *, bot_id: str, tenant: TenantContext
-                           ) -> List[KnowledgeBase]:
+    async def list_for_bot(self, *, bot_id: str, tenant: TenantContext) -> list[KnowledgeBase]:
         """KBs bound to a specific bot (subset of list_for_tenant)."""
 
     @abstractmethod
@@ -44,6 +47,7 @@ class KBRepository(ABC):
 
 # ── Vector store ──────────────────────────────────────────────────
 
+
 class VectorStore(ABC):
     """Backs similarity search. The infrastructure adapter knows
     where the vectors live (pgvector, Pinecone…)."""
@@ -51,8 +55,8 @@ class VectorStore(ABC):
     @abstractmethod
     async def upsert(
         self,
-        chunks: List[Chunk],
-        embeddings: List[List[float]],
+        chunks: list[Chunk],
+        embeddings: list[list[float]],
         *,
         tenant: TenantContext,
     ) -> int:
@@ -62,12 +66,12 @@ class VectorStore(ABC):
     @abstractmethod
     async def similarity_search(
         self,
-        embedding: List[float],
+        embedding: list[float],
         *,
-        kb_ids: Tuple[KBId, ...],
+        kb_ids: tuple[KBId, ...],
         tenant: TenantContext,
-        top_k:  int = 5,
-    ) -> List[RetrievedChunk]:
+        top_k: int = 5,
+    ) -> list[RetrievedChunk]:
         """Dense retrieval. ``kb_ids`` filters by KB; tenant is the
         primary isolation key (vectors live in a tenant-scoped
         namespace per the spec)."""
@@ -77,16 +81,16 @@ class VectorStore(ABC):
         self,
         query: str,
         *,
-        kb_ids: Tuple[KBId, ...],
+        kb_ids: tuple[KBId, ...],
         tenant: TenantContext,
-        top_k:  int = 5,
-    ) -> List[RetrievedChunk]:
+        top_k: int = 5,
+    ) -> list[RetrievedChunk]:
         """BM25-style lexical search. Used by hybrid retrievers."""
 
     @abstractmethod
     async def delete_chunks(
         self,
-        chunk_ids: List[ChunkId],
+        chunk_ids: list[ChunkId],
         *,
         tenant: TenantContext,
     ) -> int:
@@ -95,11 +99,12 @@ class VectorStore(ABC):
 
 # ── Embedding client ──────────────────────────────────────────────
 
+
 class EmbeddingClient(ABC):
     """Turns text into vectors. Adapters carry their own batching."""
 
     @abstractmethod
-    async def embed(self, texts: List[str]) -> List[List[float]]:
+    async def embed(self, texts: list[str]) -> list[list[float]]:
         """Returns one vector per text, in the same order. Provider
         rate-limit / retry logic lives in the adapter."""
 
@@ -115,6 +120,7 @@ class EmbeddingClient(ABC):
 
 
 # ── Retrieval strategy ────────────────────────────────────────────
+
 
 class Retriever(ABC):
     """Composes VectorStore + EmbeddingClient (+ optional reranker)
@@ -136,5 +142,4 @@ class Retriever(ABC):
         query: RetrievalQuery,
         *,
         tenant: TenantContext,
-    ) -> List[RetrievedChunk]:
-        ...
+    ) -> list[RetrievedChunk]: ...

@@ -7,70 +7,78 @@ Proves:
     * Unknown tool name produces an is_error tool turn (not a crash).
     * Tool execution exception produces an is_error tool turn.
 """
+
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import pytest
 
 from src.application.llm import (
-    CompleteWithToolLoopUseCase, ToolLoopInput,
+    CompleteWithToolLoopUseCase,
+    ToolLoopInput,
 )
 from src.domain.llm.repositories import LLMProvider
 from src.domain.llm.value_objects import (
-    FinishReason, LLMMessage, LLMRequest, LLMResponse, LLMToolCall, LLMUsage,
-    MessageRole, ModelId,
+    FinishReason,
+    LLMMessage,
+    LLMRequest,
+    LLMResponse,
+    LLMToolCall,
+    LLMUsage,
+    MessageRole,
+    ModelId,
 )
 from src.domain.shared.tenant import TenantContext
 from src.domain.tools.entities import Tool
 from src.domain.tools.repositories import ToolCatalogue, ToolExecutor
 from src.domain.tools.value_objects import (
-    ToolName, ToolResult, ToolSchema,
+    ToolName,
+    ToolResult,
+    ToolSchema,
 )
 
-
 # ── Fakes ───────────────────────────────────────────────────────────
+
 
 class _ScriptedProvider(LLMProvider):
     """Returns the next response from a queued script. Useful for
     exercising loop turns deterministically."""
 
-    def __init__(self, script: List[LLMResponse]) -> None:
+    def __init__(self, script: list[LLMResponse]) -> None:
         self._script = list(script)
-        self.calls: List[LLMRequest] = []
+        self.calls: list[LLMRequest] = []
 
-    async def complete(self, request: LLMRequest, *, tenant: TenantContext
-                       ) -> LLMResponse:
+    async def complete(self, request: LLMRequest, *, tenant: TenantContext) -> LLMResponse:
         self.calls.append(request)
         if not self._script:
             # Default — force a clean termination if the loop asked
             # for "one more turn" beyond what the test scripted.
             return LLMResponse(
-                content       = "done",
-                finish_reason = FinishReason.STOP,
-                model         = ModelId("test"),
+                content="done",
+                finish_reason=FinishReason.STOP,
+                model=ModelId("test"),
             )
         return self._script.pop(0)
 
 
 class _FakeCatalogue(ToolCatalogue):
-    def __init__(self, tools: List[Tool]) -> None:
+    def __init__(self, tools: list[Tool]) -> None:
         self._tools = {str(t.name): t for t in tools}
 
-    async def list_for(self, tenant: TenantContext) -> List[Tool]:
+    async def list_for(self, tenant: TenantContext) -> list[Tool]:
         return list(self._tools.values())
 
-    async def get(self, name: ToolName) -> Optional[Tool]:
+    async def get(self, name: ToolName) -> Tool | None:
         return self._tools.get(str(name))
 
 
 class _FakeExecutor(ToolExecutor):
-    def __init__(self, behaviour: Dict[str, Any] | None = None) -> None:
+    def __init__(self, behaviour: dict[str, Any] | None = None) -> None:
         self._behaviour = behaviour or {}
-        self.executions: List[tuple[str, Dict[str, Any]]] = []
+        self.executions: list[tuple[str, dict[str, Any]]] = []
 
-    async def execute(self, *, tool, arguments, tenant, context=None
-                      ) -> ToolResult:
+    async def execute(self, *, tool, arguments, tenant, context=None) -> ToolResult:
         self.executions.append((str(tool.name), dict(arguments)))
         recipe = self._behaviour.get(str(tool.name))
         if recipe is None:
@@ -82,12 +90,13 @@ class _FakeExecutor(ToolExecutor):
 
 # ── Helpers ─────────────────────────────────────────────────────────
 
+
 def _tool(name: str) -> Tool:
     return Tool(
-        name                 = ToolName(name),
-        description          = name,
-        input_schema         = ToolSchema(json_schema={"type": "object"}),
-        required_permissions = tuple(),
+        name=ToolName(name),
+        description=name,
+        input_schema=ToolSchema(json_schema={"type": "object"}),
+        required_permissions=(),
     )
 
 
@@ -101,36 +110,42 @@ def _user_msg(text: str) -> LLMMessage:
 
 def _text_response(text: str) -> LLMResponse:
     return LLMResponse(
-        content       = text,
-        finish_reason = FinishReason.STOP,
-        model         = ModelId("test"),
-        usage         = LLMUsage(total_tokens=10),
+        content=text,
+        finish_reason=FinishReason.STOP,
+        model=ModelId("test"),
+        usage=LLMUsage(total_tokens=10),
     )
 
 
 def _tool_call_response(tc_id: str, name: str, args: str = "{}") -> LLMResponse:
     return LLMResponse(
-        content       = "",
-        tool_calls    = (LLMToolCall(id=tc_id, name=name, arguments=args),),
-        finish_reason = FinishReason.TOOL_CALLS,
-        model         = ModelId("test"),
-        usage         = LLMUsage(total_tokens=20),
+        content="",
+        tool_calls=(LLMToolCall(id=tc_id, name=name, arguments=args),),
+        finish_reason=FinishReason.TOOL_CALLS,
+        model=ModelId("test"),
+        usage=LLMUsage(total_tokens=20),
     )
 
 
-def _use_case(*, script: List[LLMResponse], tools: List[Tool] | None = None,
-              executor_behaviour: Dict[str, Any] | None = None,
-              ) -> tuple[CompleteWithToolLoopUseCase, _ScriptedProvider, _FakeExecutor]:
+def _use_case(
+    *,
+    script: list[LLMResponse],
+    tools: list[Tool] | None = None,
+    executor_behaviour: dict[str, Any] | None = None,
+) -> tuple[CompleteWithToolLoopUseCase, _ScriptedProvider, _FakeExecutor]:
     provider = _ScriptedProvider(script=script)
     catalogue = _FakeCatalogue(tools or [_tool("dummy")])
-    executor  = _FakeExecutor(behaviour=executor_behaviour)
+    executor = _FakeExecutor(behaviour=executor_behaviour)
     uc = CompleteWithToolLoopUseCase(
-        provider=provider, catalogue=catalogue, executor=executor,
+        provider=provider,
+        catalogue=catalogue,
+        executor=executor,
     )
     return uc, provider, executor
 
 
 # ── Tests ───────────────────────────────────────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_loop_returns_text_immediately_when_no_tool_calls():
@@ -138,7 +153,7 @@ async def test_loop_returns_text_immediately_when_no_tool_calls():
     out = await uc.execute(
         input_=ToolLoopInput(
             messages=(_user_msg("hi"),),
-            tools=tuple(),
+            tools=(),
         ),
         tenant=_tenant(),
     )
@@ -164,7 +179,16 @@ async def test_loop_executes_tool_then_summarises():
     out = await uc.execute(
         input_=ToolLoopInput(
             messages=(_user_msg("look up shielva"),),
-            tools=({"type":"function","function":{"name":"lookup","description":"x","parameters":{}}},),
+            tools=(
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "lookup",
+                        "description": "x",
+                        "parameters": {},
+                    },
+                },
+            ),
         ),
         tenant=_tenant(),
     )
@@ -188,9 +212,7 @@ async def test_loop_truncates_after_max_iterations():
     Script: exactly ``max_iterations`` tool-using turns + 1 final
     text turn for the forced no-tools summary call.
     """
-    script = [
-        _tool_call_response(f"tc-{i}", "looping", "{}") for i in range(3)
-    ] + [_text_response("giving up")]
+    script = [_tool_call_response(f"tc-{i}", "looping", "{}") for i in range(3)] + [_text_response("giving up")]
     uc, provider, _ = _use_case(
         script=script,
         tools=[_tool("looping")],
@@ -198,7 +220,16 @@ async def test_loop_truncates_after_max_iterations():
     out = await uc.execute(
         input_=ToolLoopInput(
             messages=(_user_msg("go"),),
-            tools=({"type":"function","function":{"name":"looping","description":"x","parameters":{}}},),
+            tools=(
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "looping",
+                        "description": "x",
+                        "parameters": {},
+                    },
+                },
+            ),
             max_iterations=3,
         ),
         tenant=_tenant(),
@@ -223,12 +254,17 @@ async def test_unknown_tool_call_returns_error_tool_message_not_crash():
             _tool_call_response("tc-1", "does_not_exist", "{}"),
             _text_response("recovered"),
         ],
-        tools=[_tool("real")],   # different name on purpose
+        tools=[_tool("real")],  # different name on purpose
     )
     out = await uc.execute(
         input_=ToolLoopInput(
             messages=(_user_msg("x"),),
-            tools=({"type":"function","function":{"name":"real","description":"x","parameters":{}}},),
+            tools=(
+                {
+                    "type": "function",
+                    "function": {"name": "real", "description": "x", "parameters": {}},
+                },
+            ),
         ),
         tenant=_tenant(),
     )
@@ -253,7 +289,12 @@ async def test_tool_execution_failure_surfaces_as_error_record():
     out = await uc.execute(
         input_=ToolLoopInput(
             messages=(_user_msg("x"),),
-            tools=({"type":"function","function":{"name":"boom","description":"x","parameters":{}}},),
+            tools=(
+                {
+                    "type": "function",
+                    "function": {"name": "boom", "description": "x", "parameters": {}},
+                },
+            ),
         ),
         tenant=_tenant(),
     )

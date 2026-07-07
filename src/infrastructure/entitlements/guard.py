@@ -23,17 +23,16 @@ Design choices:
     must not take down all LLM traffic) + warn + metric; flip with
     ``entitlement_fail_closed`` for strict deployments.
 """
+
 from __future__ import annotations
 
 import hashlib
 import hmac as _hmac
 import time
-from typing import Dict, Optional, Tuple
 
 import httpx
 import structlog
 from fastapi import HTTPException, Request
-
 from shielva_common.auth import Principal, require_principal
 
 from config.settings import get_settings
@@ -51,12 +50,12 @@ _SVC_AUTH_METHOD = "service"
 _SVC_IDENTITY = "shielva-mcp"
 
 
-def _service_headers(tenant_id: str) -> Dict[str, str]:
+def _service_headers(tenant_id: str) -> dict[str, str]:
     """S2S principal headers for MCP → billing, signed when the HMAC key is
     configured (works in billing's ``strict`` principal mode; unsigned is fine
     in ``verify`` mode)."""
     tid = tenant_id or ""
-    headers: Dict[str, str] = {
+    headers: dict[str, str] = {
         "X-Shielva-User-Id": _SVC_USER_ID,
         "X-Shielva-Email": _SVC_EMAIL,
         "X-Shielva-Tenant-Id": tid,
@@ -74,9 +73,7 @@ def _service_headers(tenant_id: str) -> Dict[str, str]:
     except Exception:  # pragma: no cover — key not configured
         raw_key = ""
     if raw_key:
-        canonical = (
-            f"{_SVC_USER_ID}\n{_SVC_EMAIL}\n{tid}\n{_SVC_ROLES}\n{_SVC_AUTH_METHOD}"
-        ).encode()
+        canonical = (f"{_SVC_USER_ID}\n{_SVC_EMAIL}\n{tid}\n{_SVC_ROLES}\n{_SVC_AUTH_METHOD}").encode()
         headers["X-Shielva-Principal-Signature"] = _hmac.new(
             raw_key.encode() if isinstance(raw_key, str) else raw_key,
             canonical,
@@ -90,10 +87,10 @@ class EntitlementGuard:
 
     def __init__(self) -> None:
         # (tenant_id, feature_key) → (entitled, expiry_monotonic)
-        self._cache: Dict[Tuple[str, str], Tuple[bool, float]] = {}
+        self._cache: dict[tuple[str, str], tuple[bool, float]] = {}
 
     # ── cache ──────────────────────────────────────────────────────────────
-    def _cache_get(self, key: Tuple[str, str]) -> Optional[bool]:
+    def _cache_get(self, key: tuple[str, str]) -> bool | None:
         hit = self._cache.get(key)
         if hit is None:
             return None
@@ -103,7 +100,7 @@ class EntitlementGuard:
             return None
         return entitled
 
-    def _cache_set(self, key: Tuple[str, str], entitled: bool) -> None:
+    def _cache_set(self, key: tuple[str, str], entitled: bool) -> None:
         ttl = max(1, get_settings().entitlement_cache_ttl_seconds)
         self._cache[key] = (entitled, time.monotonic() + ttl)
 
@@ -112,10 +109,7 @@ class EntitlementGuard:
         from shielva_common.tls import internal_ca_verify
 
         s = get_settings()
-        url = (
-            f"{s.billing_url.rstrip('/')}"
-            f"/v1/subscriptions/{tenant_id}/entitlements/{feature_key}"
-        )
+        url = f"{s.billing_url.rstrip('/')}/v1/subscriptions/{tenant_id}/entitlements/{feature_key}"
         async with httpx.AsyncClient(timeout=5.0, verify=internal_ca_verify()) as client:
             resp = await client.get(url, headers=_service_headers(tenant_id))
         if resp.status_code == 200:
@@ -132,12 +126,14 @@ class EntitlementGuard:
             entitled = await self._ask_billing(tenant_id, feature_key)
             self._cache_set(key, entitled)
             return entitled
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             allow = not get_settings().entitlement_fail_closed
             logger.warning(
                 "mcp.entitlement_check_failed",
-                tenant_id=tenant_id, feature_key=feature_key,
-                error=str(exc)[:200], decision="allow" if allow else "deny",
+                tenant_id=tenant_id,
+                feature_key=feature_key,
+                error=str(exc)[:200],
+                decision="allow" if allow else "deny",
             )
             return allow  # fail open (default) or closed
 
@@ -152,7 +148,8 @@ class EntitlementGuard:
             return
         logger.info(
             "mcp.entitlement_denied",
-            tenant_id=principal.tenant_id, feature_key=feature_key,
+            tenant_id=principal.tenant_id,
+            feature_key=feature_key,
         )
         raise HTTPException(
             status_code=403,
@@ -168,7 +165,7 @@ class EntitlementGuard:
         )
 
 
-_GUARD: Optional[EntitlementGuard] = None
+_GUARD: EntitlementGuard | None = None
 
 
 def get_entitlement_guard() -> EntitlementGuard:
@@ -186,6 +183,7 @@ def require_entitlement(feature_key: str):
         @router.post("/codegen/complete",
                      dependencies=[Depends(require_entitlement("codegen"))])
     """
+
     async def _dep(request: Request) -> None:
         if not get_settings().entitlement_enabled:
             return
@@ -204,5 +202,6 @@ async def require_llm_entitlement(request: Request) -> None:
         return
     principal = require_principal(request)
     await get_entitlement_guard().enforce(
-        principal=principal, feature_key=s.entitlement_llm_feature_key,
+        principal=principal,
+        feature_key=s.entitlement_llm_feature_key,
     )

@@ -6,6 +6,7 @@ a subset of arguments, and unknown variables must remain as their
 literal ``{{name}}`` form in the output so the client can spot
 omissions.
 """
+
 from __future__ import annotations
 
 from src.domain.bots.value_objects import PromptTemplate
@@ -21,18 +22,15 @@ class TestVariableExtraction:
         assert vars_[0].name == "name"
 
     def test_multiple_distinct_variables(self) -> None:
-        names = [v.name for v in PromptTemplate(
-            "Hi {{first}} {{last}}. Role: {{role}}.").variables]
+        names = [v.name for v in PromptTemplate("Hi {{first}} {{last}}. Role: {{role}}.").variables]
         assert names == ["first", "last", "role"]
 
     def test_duplicate_variables_deduplicated(self) -> None:
-        names = [v.name for v in PromptTemplate(
-            "{{n}}, {{n}}, {{n}}").variables]
+        names = [v.name for v in PromptTemplate("{{n}}, {{n}}, {{n}}").variables]
         assert names == ["n"]
 
     def test_whitespace_tolerance(self) -> None:
-        names = [v.name for v in PromptTemplate(
-            "{{  name  }} and {{role}}").variables]
+        names = [v.name for v in PromptTemplate("{{  name  }} and {{role}}").variables]
         assert names == ["name", "role"]
 
 

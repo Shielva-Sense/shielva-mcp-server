@@ -8,6 +8,7 @@ Tests prove:
       (only ``initialize`` and ``ping`` allowed when state is
       INITIALIZING).
 """
+
 from __future__ import annotations
 
 import pytest
@@ -15,20 +16,25 @@ import pytest
 from src.domain.chat.entities import Session
 from src.domain.chat.errors import SessionStateError
 from src.domain.chat.value_objects import (
-    ClientInfo, ProtocolVersion, SessionId, SessionState,
+    ClientInfo,
+    ProtocolVersion,
+    SessionId,
+    SessionState,
 )
 from src.domain.shared.tenant import TenantContext
 
 
 def _make_session() -> Session:
     return Session(
-        id               = SessionId("test-session"),
-        tenant           = TenantContext(
-            tenant_id="t1", user_id="u1", user_email="u@example.com",
+        id=SessionId("test-session"),
+        tenant=TenantContext(
+            tenant_id="t1",
+            user_id="u1",
+            user_email="u@example.com",
         ),
-        protocol_version = ProtocolVersion("2024-11-05"),
-        state            = SessionState.INITIALIZING,
-        client_info      = ClientInfo(name="test-client", version="0.1"),
+        protocol_version=ProtocolVersion("2024-11-05"),
+        state=SessionState.INITIALIZING,
+        client_info=ClientInfo(name="test-client", version="0.1"),
     )
 
 
@@ -67,10 +73,16 @@ class TestAllowsMethod:
         s = _make_session()
         assert s.allows_method(method) is True
 
-    @pytest.mark.parametrize("method", [
-        "tools/list", "tools/call", "resources/list",
-        "prompts/list", "logging/setLevel",
-    ])
+    @pytest.mark.parametrize(
+        "method",
+        [
+            "tools/list",
+            "tools/call",
+            "resources/list",
+            "prompts/list",
+            "logging/setLevel",
+        ],
+    )
     def test_other_methods_blocked_pre_ready(self, method: str) -> None:
         s = _make_session()
         assert s.allows_method(method) is False
@@ -78,8 +90,13 @@ class TestAllowsMethod:
     def test_all_methods_allowed_after_ready(self) -> None:
         s = _make_session()
         s.mark_ready()
-        for m in ("tools/list", "tools/call", "resources/list",
-                  "prompts/list", "logging/setLevel"):
+        for m in (
+            "tools/list",
+            "tools/call",
+            "resources/list",
+            "prompts/list",
+            "logging/setLevel",
+        ):
             assert s.allows_method(m) is True
 
     def test_no_methods_allowed_during_close(self) -> None:

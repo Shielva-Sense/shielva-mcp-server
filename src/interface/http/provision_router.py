@@ -6,6 +6,7 @@ provisioning helpers (``handle_provision_kb`` / ``handle_provision_bot``
 ``application/knowledge`` + ``application/bots`` use cases; until
 then the route stays consumer-compatible.
 """
+
 from __future__ import annotations
 
 import os
@@ -14,9 +15,12 @@ import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from src.protocol.models import (
-    ProvisionBotRequest, ProvisionBotResponse,
-    ProvisionKBRequest, ProvisionKBResponse,
-    TestBotRequest, TestBotResponse,
+    ProvisionBotRequest,
+    ProvisionBotResponse,
+    ProvisionKBRequest,
+    ProvisionKBResponse,
+    TestBotRequest,
+    TestBotResponse,
 )
 
 from ._deps import get_tenant_context
@@ -48,11 +52,12 @@ async def provision_kb(
     )
     try:
         return await _handler(request).handle_provision_kb(
-            request=body, tenant_context=tenant_context,
+            request=body,
+            tenant_context=tenant_context,
         )
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e))
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.error("KB provisioning failed", error=str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -70,11 +75,12 @@ async def provision_bot(
     )
     try:
         return await _handler(request).handle_provision_bot(
-            request=body, tenant_context=tenant_context,
+            request=body,
+            tenant_context=tenant_context,
         )
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e))
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -91,11 +97,12 @@ async def test_bot(
     )
     try:
         return await _handler(request).handle_test_bot(
-            request=body, tenant_context=tenant_context,
+            request=body,
+            tenant_context=tenant_context,
         )
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e))
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 

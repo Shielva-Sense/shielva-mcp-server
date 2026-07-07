@@ -27,16 +27,24 @@ Concretely: we call ``litellm.acompletion`` directly (same as
 :class:`LLMRouter._execute_sync`'s inner provider call) and skip the
 router's loop.
 """
+
 from __future__ import annotations
 
-from typing import Any, AsyncIterator, Dict, List, Optional
+from collections.abc import AsyncIterator
+from typing import Any
 
 import structlog
 
 from src.domain.llm.repositories import LLMProvider
 from src.domain.llm.value_objects import (
-    FinishReason, LLMMessage, LLMRequest, LLMResponse, LLMStreamChunk, LLMToolCall,
-    LLMUsage, MessageRole, ModelId,
+    FinishReason,
+    LLMRequest,
+    LLMResponse,
+    LLMStreamChunk,
+    LLMToolCall,
+    LLMUsage,
+    MessageRole,
+    ModelId,
 )
 from src.domain.shared.tenant import TenantContext
 from src.routing.tenant_llm_resolver import get_tenant_llm_resolver
@@ -67,26 +75,26 @@ class LiteLLMProviderAdapter(LLMProvider):
 
         messages = _to_litellm_messages(request.messages)
 
-        kwargs: Dict[str, Any] = {
-            "messages":    messages,
-            "max_tokens":  request.max_tokens,
+        kwargs: dict[str, Any] = {
+            "messages": messages,
+            "max_tokens": request.max_tokens,
             "temperature": request.temperature,
         }
         if request.tools:
-            kwargs["tools"]       = list(request.tools)
+            kwargs["tools"] = list(request.tools)
             kwargs["tool_choice"] = request.tool_choice or "auto"
 
         # (model, api_key, api_base) attempts: the per-tenant target first (when
         # the caller didn't pin a model), then the platform fallback chain.
         attempts = await _build_attempts(request, tenant, self._router)
 
-        last_exc: Optional[Exception] = None
+        last_exc: Exception | None = None
         for candidate, ak, base in attempts:
             _apply_routing(kwargs, candidate, ak, base)
             try:
                 provider_resp = await acompletion(**kwargs)
                 return _from_litellm_response(provider_resp, model_used=candidate)
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 last_exc = exc
                 logger.warning(
                     "mcp.llm_provider_attempt_failed",
@@ -116,11 +124,11 @@ class LiteLLMProviderAdapter(LLMProvider):
         from litellm import acompletion
 
         messages = _to_litellm_messages(request.messages)
-        kwargs: Dict[str, Any] = {
-            "messages":    messages,
-            "max_tokens":  request.max_tokens,
+        kwargs: dict[str, Any] = {
+            "messages": messages,
+            "max_tokens": request.max_tokens,
             "temperature": request.temperature,
-            "stream":      True,
+            "stream": True,
         }
 
         # (model, api_key, api_base) attempts: per-tenant target first, then the
@@ -128,18 +136,20 @@ class LiteLLMProviderAdapter(LLMProvider):
         attempts = await _build_attempts(request, tenant, self._router)
         resp_stream: Any = None
         used_model = attempts[0][0]
-        last_exc: Optional[Exception] = None
+        last_exc: Exception | None = None
         for candidate, ak, base in attempts:
             _apply_routing(kwargs, candidate, ak, base)
             try:
                 resp_stream = await acompletion(**kwargs)
                 used_model = candidate
                 break
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 last_exc = exc
                 logger.warning(
                     "mcp.llm_stream_connect_failed",
-                    model=candidate, tenant_id=tenant.tenant_id, error=str(exc)[:200],
+                    model=candidate,
+                    tenant_id=tenant.tenant_id,
+                    error=str(exc)[:200],
                 )
 
         if resp_stream is None:
@@ -154,7 +164,7 @@ class LiteLLMProviderAdapter(LLMProvider):
             delta_obj = getattr(choice, "delta", None)
             text = (getattr(delta_obj, "content", None) or "") if delta_obj else ""
             finish_raw = getattr(choice, "finish_reason", None)
-            finish: Optional[FinishReason] = None
+            finish: FinishReason | None = None
             if finish_raw:
                 try:
                     finish = FinishReason(str(finish_raw).lower())
@@ -162,17 +172,20 @@ class LiteLLMProviderAdapter(LLMProvider):
                     finish = FinishReason.OTHER
             if text or finish is not None:
                 yield LLMStreamChunk(
-                    delta=text, finish_reason=finish, model=ModelId(used_model),
+                    delta=text,
+                    finish_reason=finish,
+                    model=ModelId(used_model),
                 )
 
 
 # ── helpers ───────────────────────────────────────────────────────
 
+
 async def _build_attempts(
     request: LLMRequest,
     tenant: TenantContext,
     router: Any,
-) -> List[tuple]:
+) -> list[tuple]:
     """Ordered (model, api_key, api_base) attempts.
 
     When the caller pinned an explicit ``request.model`` it is honoured as-is.
@@ -181,14 +194,12 @@ async def _build_attempts(
     platform default. The platform fallback chain (with platform keys) always
     follows, so a tenant key failure still degrades gracefully.
     """
-    primary_model: Optional[str] = str(request.model) if request.model else None
-    primary_key: Optional[str] = None
-    primary_base: Optional[str] = None
+    primary_model: str | None = str(request.model) if request.model else None
+    primary_key: str | None = None
+    primary_base: str | None = None
 
     if request.model is None:
-        resolved = await get_tenant_llm_resolver().resolve(
-            getattr(tenant, "tenant_id", None)
-        )
+        resolved = await get_tenant_llm_resolver().resolve(getattr(tenant, "tenant_id", None))
         if resolved is not None:
             primary_model = resolved.model
             primary_key = resolved.api_key
@@ -197,20 +208,20 @@ async def _build_attempts(
     if primary_model is None:
         primary_model = router.default_model
     if primary_key is None:
-        primary_key = router._get_api_key(primary_model)  # noqa: SLF001
+        primary_key = router._get_api_key(primary_model)
 
-    attempts: List[tuple] = [(primary_model, primary_key, primary_base)]
+    attempts: list[tuple] = [(primary_model, primary_key, primary_base)]
     for fb in router.fallback_models:
         if fb != primary_model:
-            attempts.append((fb, router._get_api_key(fb), None))  # noqa: SLF001
+            attempts.append((fb, router._get_api_key(fb), None))
     return attempts
 
 
 def _apply_routing(
-    kwargs: Dict[str, Any],
+    kwargs: dict[str, Any],
     model: str,
-    api_key: Optional[str],
-    api_base: Optional[str],
+    api_key: str | None,
+    api_base: str | None,
 ) -> None:
     """Set model/api_key/api_base on the litellm kwargs, clearing stale values."""
     kwargs["model"] = model
@@ -224,14 +235,14 @@ def _apply_routing(
         kwargs.pop("api_base", None)
 
 
-def _to_litellm_messages(messages) -> List[Dict[str, Any]]:
-    out: List[Dict[str, Any]] = []
+def _to_litellm_messages(messages) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
     for m in messages:
-        d: Dict[str, Any] = {"role": m.role.value, "content": m.content or ""}
+        d: dict[str, Any] = {"role": m.role.value, "content": m.content or ""}
         if m.tool_calls:
             d["tool_calls"] = [
                 {
-                    "id":   tc.id,
+                    "id": tc.id,
                     "type": "function",
                     "function": {"name": tc.name, "arguments": tc.arguments or "{}"},
                 }
@@ -262,26 +273,24 @@ def _from_litellm_response(provider_resp: Any, *, model_used: str) -> LLMRespons
     raw_tool_calls = getattr(msg, "tool_calls", None) or ()
     tool_calls = tuple(
         LLMToolCall(
-            id        = getattr(tc, "id", "") or "",
-            name      = (getattr(tc, "function", None).name
-                         if getattr(tc, "function", None) else "") or "",
-            arguments = (getattr(tc, "function", None).arguments
-                         if getattr(tc, "function", None) else "{}") or "{}",
+            id=getattr(tc, "id", "") or "",
+            name=(getattr(tc, "function", None).name if getattr(tc, "function", None) else "") or "",
+            arguments=(getattr(tc, "function", None).arguments if getattr(tc, "function", None) else "{}") or "{}",
         )
         for tc in raw_tool_calls
     )
 
     usage_obj = getattr(provider_resp, "usage", None)
     usage = LLMUsage(
-        prompt_tokens     = int(getattr(usage_obj, "prompt_tokens", 0) or 0),
-        completion_tokens = int(getattr(usage_obj, "completion_tokens", 0) or 0),
-        total_tokens      = int(getattr(usage_obj, "total_tokens", 0) or 0),
+        prompt_tokens=int(getattr(usage_obj, "prompt_tokens", 0) or 0),
+        completion_tokens=int(getattr(usage_obj, "completion_tokens", 0) or 0),
+        total_tokens=int(getattr(usage_obj, "total_tokens", 0) or 0),
     )
 
     return LLMResponse(
-        content       = getattr(msg, "content", None) or "",
-        tool_calls    = tool_calls,
-        model         = ModelId(model_used),
-        finish_reason = finish,
-        usage         = usage,
+        content=getattr(msg, "content", None) or "",
+        tool_calls=tool_calls,
+        model=ModelId(model_used),
+        finish_reason=finish,
+        usage=usage,
     )

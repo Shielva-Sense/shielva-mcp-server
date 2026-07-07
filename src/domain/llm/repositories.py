@@ -14,10 +14,11 @@ True token-by-token streaming (yielding partial deltas) would
 warrant a separate ``stream(...)`` method; we'll add it the day
 ``notifications/progress`` over MCP actually emits per-token events.
 """
+
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import AsyncIterator
+from collections.abc import AsyncIterator
 
 from ..shared.tenant import TenantContext
 from .value_objects import LLMRequest, LLMResponse, LLMStreamChunk

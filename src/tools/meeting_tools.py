@@ -13,10 +13,11 @@ Tools:
   meeting_context_query    — query the meeting transcript KB
   get_delegation_rules     — fetch the user's delegation persona config
 """
+
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, Optional
+from typing import Any
 
 import httpx
 import structlog
@@ -52,13 +53,14 @@ async def _tms_post(path: str, tenant_id: str, payload: dict) -> dict:
 
 # ── Tool handlers ─────────────────────────────────────────────────────────────
 
+
 async def create_tms_goal(
     tenant_context: TenantContext,
     title: str,
     description: str = "",
     goal_type: str = "objective",
     created_by: str = "meeting-bot",
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Create a strategic Goal in TMS from meeting transcript context.
     Use for high-level quarterly or annual objectives discussed in the meeting.
@@ -87,10 +89,10 @@ async def create_tms_epic(
     tenant_context: TenantContext,
     title: str,
     description: str = "",
-    goal_id: Optional[str] = None,
+    goal_id: str | None = None,
     priority: str = "medium",
     created_by: str = "meeting-bot",
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Create an Epic in TMS. Link to a Goal by goal_id if one was just created.
     Use for major work streams or feature areas discussed in the meeting.
@@ -126,9 +128,9 @@ async def create_tms_sprint(
     goal: str,
     start_date: str,
     end_date: str,
-    epic_id: Optional[str] = None,
+    epic_id: str | None = None,
     created_by: str = "meeting-bot",
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Create a Sprint in TMS from a time-boxed iteration discussed in the meeting.
     start_date and end_date must be ISO date strings (YYYY-MM-DD).
@@ -164,11 +166,11 @@ async def create_tms_ticket(
     ticket_type: str = "task",
     description: str = "",
     priority: str = "MEDIUM",
-    assigned_to_name: Optional[str] = None,
-    sprint_id: Optional[str] = None,
-    epic_id: Optional[str] = None,
+    assigned_to_name: str | None = None,
+    sprint_id: str | None = None,
+    epic_id: str | None = None,
     created_by: str = "meeting-bot",
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Create a Ticket in TMS for a specific action item or task from the meeting.
     ticket_type must be one of: task, story, bug, feature.
@@ -204,15 +206,14 @@ async def create_tms_ticket(
 async def meeting_context_query(
     tenant_context: TenantContext,
     query: str,
-    meeting_id: Optional[str] = None,
-) -> Dict[str, Any]:
+    meeting_id: str | None = None,
+) -> dict[str, Any]:
     """
     Query the shielva-presence transcript store for context about a specific meeting.
     Use when you need to clarify a detail before creating a TMS entity.
     """
     try:
         async with httpx.AsyncClient(verify=_SSL, timeout=10.0) as client:
-            params: dict = {}
             if meeting_id:
                 resp = await client.get(
                     f"{_PRESENCE_URL}/presence/api/v1/transcripts/{meeting_id}",
@@ -221,9 +222,7 @@ async def meeting_context_query(
                 resp.raise_for_status()
                 data = resp.json()
                 turns = data.get("turns", [])
-                context = "\n".join(
-                    f"{t['speaker_name']}: {t['text']}" for t in turns[-20:]
-                )
+                context = "\n".join(f"{t['speaker_name']}: {t['text']}" for t in turns[-20:])
                 return {"context": context, "turn_count": len(turns)}
             return {"context": "", "turn_count": 0}
     except Exception as e:
@@ -233,7 +232,7 @@ async def meeting_context_query(
 async def get_delegation_rules(
     tenant_context: TenantContext,
     user_id: str,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Fetch the user's AI delegation persona rules (topic restrictions, language, KB IDs).
     Use to ensure bot responses respect the user's configured boundaries.
@@ -255,7 +254,7 @@ async def get_delegation_rules(
 
 # ── Tool definitions (mirrors codegen_tools.py pattern) ──────────────────────
 
-from src.protocol.models import ToolDefinition  # noqa: E402
+from src.protocol.models import ToolDefinition
 
 MEETING_TOOL_DEFINITIONS = [
     (
@@ -267,10 +266,30 @@ MEETING_TOOL_DEFINITIONS = [
                 "Returns the created goal's id."
             ),
             parameters=[
-                {"name": "title",       "type": "string", "description": "Goal title",              "required": True},
-                {"name": "description", "type": "string", "description": "Goal description",         "required": False},
-                {"name": "goal_type",   "type": "string", "description": "objective | key_result",   "required": False},
-                {"name": "created_by",  "type": "string", "description": "User id of meeting host",  "required": False},
+                {
+                    "name": "title",
+                    "type": "string",
+                    "description": "Goal title",
+                    "required": True,
+                },
+                {
+                    "name": "description",
+                    "type": "string",
+                    "description": "Goal description",
+                    "required": False,
+                },
+                {
+                    "name": "goal_type",
+                    "type": "string",
+                    "description": "objective | key_result",
+                    "required": False,
+                },
+                {
+                    "name": "created_by",
+                    "type": "string",
+                    "description": "User id of meeting host",
+                    "required": False,
+                },
             ],
             requires_permissions=[],
             enabled_by_default=True,
@@ -285,11 +304,36 @@ MEETING_TOOL_DEFINITIONS = [
                 "Optionally link to a Goal by goal_id. Returns the created epic's id."
             ),
             parameters=[
-                {"name": "title",       "type": "string", "description": "Epic title",              "required": True},
-                {"name": "description", "type": "string", "description": "Epic description",         "required": False},
-                {"name": "goal_id",     "type": "string", "description": "Parent goal id",           "required": False},
-                {"name": "priority",    "type": "string", "description": "low|medium|high|critical", "required": False},
-                {"name": "created_by",  "type": "string", "description": "User id of meeting host",  "required": False},
+                {
+                    "name": "title",
+                    "type": "string",
+                    "description": "Epic title",
+                    "required": True,
+                },
+                {
+                    "name": "description",
+                    "type": "string",
+                    "description": "Epic description",
+                    "required": False,
+                },
+                {
+                    "name": "goal_id",
+                    "type": "string",
+                    "description": "Parent goal id",
+                    "required": False,
+                },
+                {
+                    "name": "priority",
+                    "type": "string",
+                    "description": "low|medium|high|critical",
+                    "required": False,
+                },
+                {
+                    "name": "created_by",
+                    "type": "string",
+                    "description": "User id of meeting host",
+                    "required": False,
+                },
             ],
             requires_permissions=[],
             enabled_by_default=True,
@@ -305,12 +349,42 @@ MEETING_TOOL_DEFINITIONS = [
                 "Returns the created sprint's id."
             ),
             parameters=[
-                {"name": "name",        "type": "string", "description": "Sprint name",              "required": True},
-                {"name": "goal",        "type": "string", "description": "Sprint goal statement",    "required": True},
-                {"name": "start_date",  "type": "string", "description": "ISO start date YYYY-MM-DD","required": True},
-                {"name": "end_date",    "type": "string", "description": "ISO end date YYYY-MM-DD",  "required": True},
-                {"name": "epic_id",     "type": "string", "description": "Parent epic id",           "required": False},
-                {"name": "created_by",  "type": "string", "description": "User id of meeting host",  "required": False},
+                {
+                    "name": "name",
+                    "type": "string",
+                    "description": "Sprint name",
+                    "required": True,
+                },
+                {
+                    "name": "goal",
+                    "type": "string",
+                    "description": "Sprint goal statement",
+                    "required": True,
+                },
+                {
+                    "name": "start_date",
+                    "type": "string",
+                    "description": "ISO start date YYYY-MM-DD",
+                    "required": True,
+                },
+                {
+                    "name": "end_date",
+                    "type": "string",
+                    "description": "ISO end date YYYY-MM-DD",
+                    "required": True,
+                },
+                {
+                    "name": "epic_id",
+                    "type": "string",
+                    "description": "Parent epic id",
+                    "required": False,
+                },
+                {
+                    "name": "created_by",
+                    "type": "string",
+                    "description": "User id of meeting host",
+                    "required": False,
+                },
             ],
             requires_permissions=[],
             enabled_by_default=True,
@@ -325,14 +399,54 @@ MEETING_TOOL_DEFINITIONS = [
                 "ticket_type: task|story|bug|feature. Returns the created ticket's id."
             ),
             parameters=[
-                {"name": "title",           "type": "string", "description": "Ticket title",                       "required": True},
-                {"name": "ticket_type",     "type": "string", "description": "task|story|bug|feature",             "required": False},
-                {"name": "description",     "type": "string", "description": "Ticket description",                  "required": False},
-                {"name": "priority",        "type": "string", "description": "LOW|MEDIUM|HIGH|CRITICAL",            "required": False},
-                {"name": "assigned_to_name","type": "string", "description": "Assignee display name from transcript","required": False},
-                {"name": "sprint_id",       "type": "string", "description": "Parent sprint id",                    "required": False},
-                {"name": "epic_id",         "type": "string", "description": "Parent epic id",                      "required": False},
-                {"name": "created_by",      "type": "string", "description": "User id of meeting host",             "required": False},
+                {
+                    "name": "title",
+                    "type": "string",
+                    "description": "Ticket title",
+                    "required": True,
+                },
+                {
+                    "name": "ticket_type",
+                    "type": "string",
+                    "description": "task|story|bug|feature",
+                    "required": False,
+                },
+                {
+                    "name": "description",
+                    "type": "string",
+                    "description": "Ticket description",
+                    "required": False,
+                },
+                {
+                    "name": "priority",
+                    "type": "string",
+                    "description": "LOW|MEDIUM|HIGH|CRITICAL",
+                    "required": False,
+                },
+                {
+                    "name": "assigned_to_name",
+                    "type": "string",
+                    "description": "Assignee display name from transcript",
+                    "required": False,
+                },
+                {
+                    "name": "sprint_id",
+                    "type": "string",
+                    "description": "Parent sprint id",
+                    "required": False,
+                },
+                {
+                    "name": "epic_id",
+                    "type": "string",
+                    "description": "Parent epic id",
+                    "required": False,
+                },
+                {
+                    "name": "created_by",
+                    "type": "string",
+                    "description": "User id of meeting host",
+                    "required": False,
+                },
             ],
             requires_permissions=[],
             enabled_by_default=True,
@@ -347,8 +461,18 @@ MEETING_TOOL_DEFINITIONS = [
                 "Returns recent speaker turns from the transcript."
             ),
             parameters=[
-                {"name": "query",      "type": "string", "description": "What to look for",     "required": True},
-                {"name": "meeting_id", "type": "string", "description": "The meeting id",       "required": False},
+                {
+                    "name": "query",
+                    "type": "string",
+                    "description": "What to look for",
+                    "required": True,
+                },
+                {
+                    "name": "meeting_id",
+                    "type": "string",
+                    "description": "The meeting id",
+                    "required": False,
+                },
             ],
             requires_permissions=[],
             enabled_by_default=True,
@@ -363,7 +487,12 @@ MEETING_TOOL_DEFINITIONS = [
                 "Use before responding to ensure bot respects the user's configured boundaries."
             ),
             parameters=[
-                {"name": "user_id", "type": "string", "description": "The Shielva user id", "required": True},
+                {
+                    "name": "user_id",
+                    "type": "string",
+                    "description": "The Shielva user id",
+                    "required": True,
+                },
             ],
             requires_permissions=[],
             enabled_by_default=True,

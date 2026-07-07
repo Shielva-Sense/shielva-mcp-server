@@ -1,4 +1,5 @@
 """Three-tier domain exception hierarchy for shielva-mcp."""
+
 from __future__ import annotations
 
 

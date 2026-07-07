@@ -1,7 +1,6 @@
 """Bot application service — backs MCP prompts/* surface."""
-from __future__ import annotations
 
-from typing import Dict, List
+from __future__ import annotations
 
 import structlog
 
@@ -24,15 +23,15 @@ class BotApplicationService:
             raise BotNotFoundError(f"Bot not found: {bot_id}")
         return bot
 
-    async def list_bots(self, *, tenant: TenantContext) -> List[Bot]:
+    async def list_bots(self, *, tenant: TenantContext) -> list[Bot]:
         return await self._repo.list_for_tenant(tenant=tenant)
 
     async def render_prompt(
         self,
         *,
-        bot_id:    str,
-        tenant:    TenantContext,
-        arguments: Dict[str, str],
+        bot_id: str,
+        tenant: TenantContext,
+        arguments: dict[str, str],
     ) -> str:
         """Materialise the bot's prompt template with the supplied
         arguments. Unknown variables remain ``{{name}}`` in the

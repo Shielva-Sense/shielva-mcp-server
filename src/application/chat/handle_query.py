@@ -37,11 +37,12 @@ contract is the application-level RAG query operation; whether it
 delegates to the legacy MessageHandler or its own decomposed
 sub-services is an implementation detail invisible to interface/.
 """
+
 from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import structlog
 
@@ -54,28 +55,29 @@ logger = structlog.get_logger(__name__)
 # Response but expressed in application-layer terms. The interface
 # adapter translates wire types to/from these.
 
+
 @dataclass(frozen=True, slots=True)
 class HandleQueryInput:
-    query:         str
-    bot_id:        str
-    session_id:    Optional[str]            = None
-    stream:        bool                     = False
-    context:       Dict[str, Any]           = None  # type: ignore[assignment]
-    tool_options:  Dict[str, bool]          = None  # type: ignore[assignment]
-    custom_prompt: Optional[str]            = None
-    model:         Optional[str]            = None  # per-bot LLM model override
+    query: str
+    bot_id: str
+    session_id: str | None = None
+    stream: bool = False
+    context: dict[str, Any] = None  # type: ignore[assignment]
+    tool_options: dict[str, bool] = None  # type: ignore[assignment]
+    custom_prompt: str | None = None
+    model: str | None = None  # per-bot LLM model override
 
 
 @dataclass(frozen=True, slots=True)
 class HandleQueryOutput:
-    answer:       str
-    sources:      List[Dict[str, Any]]
-    tool_calls:   List[Dict[str, Any]]
-    tokens_used:  int
-    latency_ms:   int
-    model:        str
-    session_id:   str
-    query_id:     str
+    answer: str
+    sources: list[dict[str, Any]]
+    tool_calls: list[dict[str, Any]]
+    tokens_used: int
+    latency_ms: int
+    model: str
+    session_id: str
+    query_id: str
 
 
 class HandleQueryUseCase:
@@ -94,8 +96,8 @@ class HandleQueryUseCase:
     async def execute(
         self,
         *,
-        input_:  HandleQueryInput,
-        tenant:  TenantContext,
+        input_: HandleQueryInput,
+        tenant: TenantContext,
     ) -> HandleQueryOutput:
         started = time.monotonic()
         logger.info(
@@ -110,51 +112,59 @@ class HandleQueryUseCase:
         # Slice 4c will lift this so we use domain types end-to-end.
         from src.protocol.models import (
             MCPQueryRequest as LegacyRequest,
-            TenantContext   as LegacyTenant,
         )
+        from src.protocol.models import (
+            TenantContext as LegacyTenant,
+        )
+
         legacy_req = LegacyRequest(
-            query         = input_.query,
-            bot_id        = input_.bot_id,
-            session_id    = input_.session_id,
-            stream        = input_.stream,
-            context       = dict(input_.context or {}),
-            tool_options  = dict(input_.tool_options or {}),
-            custom_prompt = input_.custom_prompt,
-            model         = input_.model,
+            query=input_.query,
+            bot_id=input_.bot_id,
+            session_id=input_.session_id,
+            stream=input_.stream,
+            context=dict(input_.context or {}),
+            tool_options=dict(input_.tool_options or {}),
+            custom_prompt=input_.custom_prompt,
+            model=input_.model,
         )
         legacy_tenant = LegacyTenant(
-            tenant_id   = tenant.tenant_id,
-            user_id     = tenant.user_id,
-            user_email  = tenant.user_email,
-            role        = tenant.role,
-            permissions = list(tenant.permissions),
+            tenant_id=tenant.tenant_id,
+            user_id=tenant.user_id,
+            user_email=tenant.user_email,
+            role=tenant.role,
+            permissions=list(tenant.permissions),
         )
 
         try:
             legacy_resp = await self._handler.handle_query(
-                request=legacy_req, tenant_context=legacy_tenant,
+                request=legacy_req,
+                tenant_context=legacy_tenant,
             )
         except PermissionError:
             duration_ms = int((time.monotonic() - started) * 1000)
             logger.warning(
                 "mcp.handle_query_denied",
-                tenant_id=tenant.tenant_id, bot_id=input_.bot_id,
+                tenant_id=tenant.tenant_id,
+                bot_id=input_.bot_id,
                 duration_ms=duration_ms,
             )
             raise
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             duration_ms = int((time.monotonic() - started) * 1000)
             logger.exception(
                 "mcp.handle_query_failed",
-                tenant_id=tenant.tenant_id, bot_id=input_.bot_id,
-                duration_ms=duration_ms, error=str(e)[:200],
+                tenant_id=tenant.tenant_id,
+                bot_id=input_.bot_id,
+                duration_ms=duration_ms,
+                error=str(e)[:200],
             )
             raise
 
         duration_ms = int((time.monotonic() - started) * 1000)
         logger.info(
             "mcp.handle_query_ok",
-            tenant_id=tenant.tenant_id, bot_id=input_.bot_id,
+            tenant_id=tenant.tenant_id,
+            bot_id=input_.bot_id,
             duration_ms=duration_ms,
             model=legacy_resp.model,
             tokens_used=legacy_resp.tokens_used,
@@ -166,14 +176,14 @@ class HandleQueryUseCase:
         # as plain dicts (their model_dump shape) so the interface
         # adapter doesn't depend on protocol/models.
         return HandleQueryOutput(
-            answer       = legacy_resp.answer,
-            sources      = [s.model_dump() if hasattr(s, "model_dump") else dict(s)
-                            for s in (legacy_resp.sources or [])],
-            tool_calls   = [t.model_dump() if hasattr(t, "model_dump") else dict(t)
-                            for t in (legacy_resp.tool_calls or [])],
-            tokens_used  = int(legacy_resp.tokens_used or 0),
-            latency_ms   = int(legacy_resp.latency_ms or 0),
-            model        = str(legacy_resp.model or ""),
-            session_id   = str(legacy_resp.session_id or ""),
-            query_id     = str(legacy_resp.query_id or ""),
+            answer=legacy_resp.answer,
+            sources=[s.model_dump() if hasattr(s, "model_dump") else dict(s) for s in (legacy_resp.sources or [])],
+            tool_calls=[
+                t.model_dump() if hasattr(t, "model_dump") else dict(t) for t in (legacy_resp.tool_calls or [])
+            ],
+            tokens_used=int(legacy_resp.tokens_used or 0),
+            latency_ms=int(legacy_resp.latency_ms or 0),
+            model=str(legacy_resp.model or ""),
+            session_id=str(legacy_resp.session_id or ""),
+            query_id=str(legacy_resp.query_id or ""),
         )

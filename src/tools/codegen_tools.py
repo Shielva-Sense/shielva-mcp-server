@@ -12,21 +12,22 @@ regardless of whether MCP and integration-builder share a filesystem.
 
 Registered in mcp-server/src/main.py lifespan alongside default tools.
 """
+
 from __future__ import annotations
 
 import ast
 import re
-from typing import Any, Dict, List
+from typing import Any
 
 from src.protocol.models import TenantContext
 
-
 # ── Tool handlers ─────────────────────────────────────────────────────
+
 
 async def codegen_validate_python(
     tenant_context: TenantContext,
     code: str,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Parse Python source code with AST and return syntax errors.
 
@@ -50,7 +51,7 @@ async def codegen_analyze_imports(
     tenant_context: TenantContext,
     code: str,
     connector_class: str,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Detect common import mistakes in generated test/connector code.
 
@@ -61,25 +62,21 @@ async def codegen_analyze_imports(
 
     Returns dict with "issues" list and "has_issues" bool.
     """
-    issues: List[str] = []
+    issues: list[str] = []
 
     # Check for wrong deep-path import
-    wrong_import_pattern = re.compile(
-        rf"from\s+\w[\w.]*\.connector\s+import\s+{re.escape(connector_class)}"
-    )
+    wrong_import_pattern = re.compile(rf"from\s+\w[\w.]*\.connector\s+import\s+{re.escape(connector_class)}")
     for i, line in enumerate(code.splitlines(), 1):
         if wrong_import_pattern.search(line):
             issues.append(
-                f"Line {i}: Wrong import path '{line.strip()}' — "
-                f"should be 'from connector import {connector_class}'"
+                f"Line {i}: Wrong import path '{line.strip()}' — should be 'from connector import {connector_class}'"
             )
 
     # Check if connector class is used but not imported from connector
     correct_import = f"from connector import {connector_class}"
     if connector_class in code and correct_import not in code:
         issues.append(
-            f"Missing correct import: '{correct_import}' not found but "
-            f"'{connector_class}' is referenced in code."
+            f"Missing correct import: '{correct_import}' not found but '{connector_class}' is referenced in code."
         )
 
     # Check for wrong patch targets
@@ -98,7 +95,7 @@ async def codegen_categorize_error(
     tenant_context: TenantContext,
     error_output: str,
     code: str = "",
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Categorize a pytest error output into a known fix category.
 
@@ -118,27 +115,48 @@ async def codegen_categorize_error(
     """
     err = error_output.lower()
 
-    patterns: List[tuple] = [
-        ("syntax_error",   r"syntaxerror|invalid syntax|unexpected indent", 0.95),
-        ("import_error",   r"modulenotfounderror|importerror|no module named", 0.95),
-        ("fixture_error",  r"fixture.*not found|fixture.*applied more than once|@pytest\.fixture", 0.90),
-        ("async_error",    r"coroutine.*never awaited|asyncio.*mark|was never awaited", 0.90),
-        ("attribute_error",r"attributeerror|has no attribute", 0.85),
-        ("type_error",     r"typeerror|takes \d+ positional|unexpected keyword argument", 0.85),
-        ("assertion_error",r"assertionerror|assert.*failed", 0.80),
-        ("auth_error",     r"unauthorized|authentication|401|403|credentials|api.?key", 0.80),
-        ("network_error",  r"connectionerror|timeout|connection refused|socket", 0.75),
+    patterns: list[tuple] = [
+        ("syntax_error", r"syntaxerror|invalid syntax|unexpected indent", 0.95),
+        ("import_error", r"modulenotfounderror|importerror|no module named", 0.95),
+        (
+            "fixture_error",
+            r"fixture.*not found|fixture.*applied more than once|@pytest\.fixture",
+            0.90,
+        ),
+        (
+            "async_error",
+            r"coroutine.*never awaited|asyncio.*mark|was never awaited",
+            0.90,
+        ),
+        ("attribute_error", r"attributeerror|has no attribute", 0.85),
+        (
+            "type_error",
+            r"typeerror|takes \d+ positional|unexpected keyword argument",
+            0.85,
+        ),
+        ("assertion_error", r"assertionerror|assert.*failed", 0.80),
+        (
+            "auth_error",
+            r"unauthorized|authentication|401|403|credentials|api.?key",
+            0.80,
+        ),
+        ("network_error", r"connectionerror|timeout|connection refused|socket", 0.75),
     ]
 
     for category, pattern, confidence in patterns:
         if re.search(pattern, err):
             # Extract first non-empty line that contains the key message
             key_lines = [
-                ln.strip() for ln in error_output.splitlines()
+                ln.strip()
+                for ln in error_output.splitlines()
                 if ln.strip() and not ln.strip().startswith(("_", "=", "-"))
             ]
             key_message = key_lines[0] if key_lines else error_output[:200]
-            return {"category": category, "confidence": confidence, "key_message": key_message}
+            return {
+                "category": category,
+                "confidence": confidence,
+                "key_message": key_message,
+            }
 
     return {"category": "unknown", "confidence": 0.5, "key_message": error_output[:200]}
 
@@ -146,7 +164,7 @@ async def codegen_categorize_error(
 async def codegen_check_pytest_structure(
     tenant_context: TenantContext,
     code: str,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Detect common pytest structure problems in test code using AST analysis.
 
@@ -159,14 +177,17 @@ async def codegen_check_pytest_structure(
 
     Returns: {"issues": [...], "has_issues": bool}
     """
-    issues: List[str] = []
+    issues: list[str] = []
 
     try:
         tree = ast.parse(code)
     except SyntaxError as exc:
-        return {"has_issues": True, "issues": [f"SyntaxError at line {exc.lineno}: {exc.msg}"]}
+        return {
+            "has_issues": True,
+            "issues": [f"SyntaxError at line {exc.lineno}: {exc.msg}"],
+        }
 
-    seen_names: Dict[str, int] = {}
+    seen_names: dict[str, int] = {}
     has_import_pytest = any(
         (isinstance(node, ast.Import) and any(a.name == "pytest" for a in node.names))
         or (isinstance(node, ast.ImportFrom) and node.module == "pytest")
@@ -181,18 +202,26 @@ async def codegen_check_pytest_structure(
             continue
 
         name = node.name
-        decorators = [
-            (d.id if isinstance(d, ast.Name) else
-             (d.attr if isinstance(d, ast.Attribute) else
-              (d.func.attr if isinstance(d, ast.Call) and isinstance(d.func, ast.Attribute) else "")))
+        [
+            (
+                d.id
+                if isinstance(d, ast.Name)
+                else (
+                    d.attr
+                    if isinstance(d, ast.Attribute)
+                    else (d.func.attr if isinstance(d, ast.Call) and isinstance(d.func, ast.Attribute) else "")
+                )
+            )
             for d in node.decorator_list
         ]
 
         # Duplicate fixture decorator
-        fixture_count = sum(1 for d in node.decorator_list
-                            if (isinstance(d, ast.Attribute) and d.attr == "fixture")
-                            or (isinstance(d, ast.Call) and isinstance(d.func, ast.Attribute)
-                                and d.func.attr == "fixture"))
+        fixture_count = sum(
+            1
+            for d in node.decorator_list
+            if (isinstance(d, ast.Attribute) and d.attr == "fixture")
+            or (isinstance(d, ast.Call) and isinstance(d.func, ast.Attribute) and d.func.attr == "fixture")
+        )
         if fixture_count > 1:
             issues.append(f"Line {node.lineno}: '@pytest.fixture' applied {fixture_count}x on '{name}' — keep only one")
 
@@ -213,7 +242,9 @@ async def codegen_check_pytest_structure(
 
 # ── Tool definitions for MCP registry ────────────────────────────────
 
-from src.protocol.models import ToolDefinition  # noqa: E402 (after handlers so no circular)
+from src.protocol.models import (
+    ToolDefinition,
+)
 
 CODEGEN_TOOL_DEFINITIONS = [
     (
@@ -224,7 +255,12 @@ CODEGEN_TOOL_DEFINITIONS = [
                 "Use before writing generated code to disk to catch issues early."
             ),
             parameters=[
-                {"name": "code", "type": "string", "description": "Python source code to validate", "required": True},
+                {
+                    "name": "code",
+                    "type": "string",
+                    "description": "Python source code to validate",
+                    "required": True,
+                },
             ],
             requires_permissions=[],
             enabled_by_default=True,
@@ -239,8 +275,18 @@ CODEGEN_TOOL_DEFINITIONS = [
                 "Checks for common mistakes like 'from pkg.connector import X' instead of 'from connector import X'."
             ),
             parameters=[
-                {"name": "code", "type": "string", "description": "Python test code to analyze", "required": True},
-                {"name": "connector_class", "type": "string", "description": "Expected connector class name, e.g. GmailConnector", "required": True},
+                {
+                    "name": "code",
+                    "type": "string",
+                    "description": "Python test code to analyze",
+                    "required": True,
+                },
+                {
+                    "name": "connector_class",
+                    "type": "string",
+                    "description": "Expected connector class name, e.g. GmailConnector",
+                    "required": True,
+                },
             ],
             requires_permissions=[],
             enabled_by_default=True,
@@ -256,8 +302,18 @@ CODEGEN_TOOL_DEFINITIONS = [
                 "Use this to decide which fix strategy to apply."
             ),
             parameters=[
-                {"name": "error_output", "type": "string", "description": "Full pytest error/failure output string", "required": True},
-                {"name": "code", "type": "string", "description": "The code that produced the error (optional context)", "required": False},
+                {
+                    "name": "error_output",
+                    "type": "string",
+                    "description": "Full pytest error/failure output string",
+                    "required": True,
+                },
+                {
+                    "name": "code",
+                    "type": "string",
+                    "description": "The code that produced the error (optional context)",
+                    "required": False,
+                },
             ],
             requires_permissions=[],
             enabled_by_default=True,
@@ -272,7 +328,12 @@ CODEGEN_TOOL_DEFINITIONS = [
                 "duplicate test names, missing import pytest) via AST analysis."
             ),
             parameters=[
-                {"name": "code", "type": "string", "description": "Python test source code to check", "required": True},
+                {
+                    "name": "code",
+                    "type": "string",
+                    "description": "Python test source code to check",
+                    "required": True,
+                },
             ],
             requires_permissions=[],
             enabled_by_default=True,

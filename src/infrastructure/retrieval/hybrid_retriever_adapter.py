@@ -6,13 +6,17 @@ The existing retriever already implements RRF. We translate its
 :class:`RetrievedChunk` value objects so the application layer sees
 a clean type.
 """
-from __future__ import annotations
 
-from typing import List
+from __future__ import annotations
 
 from src.domain.knowledge.repositories import Retriever
 from src.domain.knowledge.value_objects import (
-    Chunk, ChunkId, DocumentId, KBId, RetrievalQuery, RetrievedChunk,
+    Chunk,
+    ChunkId,
+    DocumentId,
+    KBId,
+    RetrievalQuery,
+    RetrievedChunk,
 )
 from src.domain.shared.tenant import TenantContext
 
@@ -27,10 +31,10 @@ class LegacyHybridRetrieverAdapter(Retriever):
         query: RetrievalQuery,
         *,
         tenant: TenantContext,
-    ) -> List[RetrievedChunk]:
+    ) -> list[RetrievedChunk]:
         # The legacy retriever takes a single kb_id per call. For
         # multi-KB queries we fan out and merge.
-        merged: List[RetrievedChunk] = []
+        merged: list[RetrievedChunk] = []
         for kb_id in query.kb_ids:
             results = await self._retriever.retrieve(
                 query=query.query,
@@ -38,7 +42,7 @@ class LegacyHybridRetrieverAdapter(Retriever):
                 kb_id=str(kb_id),
                 top_k=query.top_k,
             )
-            for r in (results or []):
+            for r in results or []:
                 merged.append(_to_retrieved(r, kb_id))
         # Final cross-KB sort + cap.
         merged.sort(key=lambda r: r.score, reverse=True)
@@ -49,12 +53,10 @@ def _to_retrieved(r, kb_id: KBId) -> RetrievedChunk:
     """Translate ``RetrievalResult`` (legacy dataclass) → domain VO."""
     metadata = dict(getattr(r, "metadata", {}) or {})
     chunk = Chunk(
-        id          = ChunkId(str(getattr(r, "chunk_id", "")
-                                  or metadata.get("chunk_id", ""))),
-        document_id = DocumentId(str(getattr(r, "document_id", "")
-                                     or metadata.get("document_id", ""))),
-        kb_id       = kb_id,
-        content     = str(getattr(r, "content", "") or ""),
-        metadata    = metadata,
+        id=ChunkId(str(getattr(r, "chunk_id", "") or metadata.get("chunk_id", ""))),
+        document_id=DocumentId(str(getattr(r, "document_id", "") or metadata.get("document_id", ""))),
+        kb_id=kb_id,
+        content=str(getattr(r, "content", "") or ""),
+        metadata=metadata,
     )
     return RetrievedChunk(chunk=chunk, score=float(getattr(r, "score", 0.0) or 0.0))

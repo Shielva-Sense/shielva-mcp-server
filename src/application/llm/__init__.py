@@ -6,7 +6,8 @@
   loop composing LLMProvider + ToolCatalogue + ToolExecutor. The
   generic loop fix-agent migrates onto in slice 4c.
 """
-from .services  import LLMApplicationService
+
+from .services import LLMApplicationService
 from .tool_loop import (
     CompleteWithToolLoopUseCase,
     ExecutedToolCall,
@@ -15,7 +16,9 @@ from .tool_loop import (
 )
 
 __all__ = [
-    "LLMApplicationService",
     "CompleteWithToolLoopUseCase",
-    "ToolLoopInput", "ToolLoopOutput", "ExecutedToolCall",
+    "ExecutedToolCall",
+    "LLMApplicationService",
+    "ToolLoopInput",
+    "ToolLoopOutput",
 ]

@@ -10,10 +10,10 @@ Why this is in the shared kernel:
     in any single context would force cyclic imports. The shared
     kernel exists for exactly this — types every context depends on.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Tuple
 
 # The canonical Shielva-internal service identity. Per
 # docs/architecture/MCP_LLM_BROKER.md ("Auth — internal service-to-service"),
@@ -26,11 +26,11 @@ INTERNAL_SERVICE_EMAIL = "internal@shielva.ai"
 
 @dataclass(frozen=True, slots=True)
 class TenantContext:
-    tenant_id:   str
-    user_id:     str
-    user_email:  str
-    role:        str = "Customer_Basic"
-    permissions: Tuple[str, ...] = field(default_factory=tuple)
+    tenant_id: str
+    user_id: str
+    user_email: str
+    role: str = "Customer_Basic"
+    permissions: tuple[str, ...] = field(default_factory=tuple)
 
     @property
     def kb_namespace(self) -> str:

@@ -1,4 +1,5 @@
 """Base domain exceptions. Adapters translate these into HTTP / JSON-RPC."""
+
 from __future__ import annotations
 
 

@@ -20,14 +20,15 @@ next to the mcp-server root so it survives restarts.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 import re
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Dict, List, Literal, Optional
+from typing import Literal
 
 import structlog
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -38,16 +39,16 @@ from pydantic import BaseModel, Field
 logger = structlog.get_logger(__name__)
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
-_HERE            = Path(__file__).resolve()
+_HERE = Path(__file__).resolve()
 # _HERE = .../mcp-server/src/interface/http/ingest_router.py
 # parents[0]=http  [1]=interface  [2]=src  [3]=mcp-server  [4]=shielva-mcp repo root.
 # The collector lives at the repo root, NOT under mcp-server — earlier this used
 # four .parents (→ mcp-server/security-fix-collector, which does not exist) and
 # every ingest returned 503 "Collector script not found".
-COLLECTOR_DIR    = _HERE.parents[4] / "security-fix-collector"
+COLLECTOR_DIR = _HERE.parents[4] / "security-fix-collector"
 COLLECTOR_SCRIPT = COLLECTOR_DIR / "collector.py"
 SCHEDULE_CONFIG_PATH = _HERE.parent.parent.parent / "schedule_config.json"
-_COLLECTOR_ENV   = COLLECTOR_DIR / ".env"
+_COLLECTOR_ENV = COLLECTOR_DIR / ".env"
 
 
 def _read_collector_env_key(key: str) -> str:
@@ -68,61 +69,74 @@ def _read_collector_env_key(key: str) -> str:
         pass
     return ""
 
+
 ALL_ECOSYSTEMS = ["npm", "PyPI", "Go", "Maven", "RubyGems", "NuGet"]
-DEFAULT_LIMIT  = 10_000
+DEFAULT_LIMIT = 10_000
 
 # ── Models ────────────────────────────────────────────────────────────────────
 
+
 class IngestionJob(BaseModel):
-    job_id:               str
-    status:               Literal["pending", "running", "completed", "failed", "cancelled"]
-    ecosystems:           List[str]
-    limit:                int
-    timeout_minutes:      Optional[int] = None
-    started_at:           Optional[str] = None
-    completed_at:         Optional[str] = None
-    current_ecosystem:    Optional[str] = None
+    job_id: str
+    status: Literal["pending", "running", "completed", "failed", "cancelled"]
+    ecosystems: list[str]
+    limit: int
+    timeout_minutes: int | None = None
+    started_at: str | None = None
+    completed_at: str | None = None
+    current_ecosystem: str | None = None
     advisories_processed: int = 0
-    entries_stored:       int = 0
-    error_message:        Optional[str] = None
-    logs:                 List[str] = Field(default_factory=list)
-    triggered_by:         Literal["manual", "schedule"] = "manual"
+    entries_stored: int = 0
+    error_message: str | None = None
+    logs: list[str] = Field(default_factory=list)
+    triggered_by: Literal["manual", "schedule"] = "manual"
 
 
 class StartIngestionRequest(BaseModel):
-    ecosystems:           List[str]      = Field(default_factory=lambda: list(ALL_ECOSYSTEMS))
-    limit:                int            = DEFAULT_LIMIT
-    github_token:         Optional[str]  = None  # fine-grained PAT: repo/commit/advisory access
-    github_search_token:  Optional[str]  = None  # classic PAT: /search/commits (fine-grained can't)
-    timeout_minutes:      Optional[int]  = None  # None = no timeout
+    ecosystems: list[str] = Field(default_factory=lambda: list(ALL_ECOSYSTEMS))
+    limit: int = DEFAULT_LIMIT
+    github_token: str | None = None  # fine-grained PAT: repo/commit/advisory access
+    github_search_token: str | None = None  # classic PAT: /search/commits (fine-grained can't)
+    timeout_minutes: int | None = None  # None = no timeout
 
 
 class StatsResponse(BaseModel):
-    total_entries:       int
-    table:               str = "security_fix_entries"
+    total_entries: int
+    table: str = "security_fix_entries"
     collector_available: bool
-    fetched_at:          str
+    fetched_at: str
 
 
 class ScheduleConfig(BaseModel):
     """Auto-ingestion schedule config (persisted to schedule_config.json)."""
-    enabled:         bool          = False
-    hour:            int           = 0       # UTC 0-23 (default midnight)
-    minute:          int           = 0       # 0-59
-    ecosystems:      List[str]     = Field(default_factory=lambda: list(ALL_ECOSYSTEMS))
-    limit:           int           = DEFAULT_LIMIT
-    timeout_minutes: Optional[int] = 120     # None = no timeout; default 2 h
-    last_run_at:     Optional[str] = None    # ISO timestamp of last successful run (persisted)
-    next_run:        Optional[str] = None    # computed at read time, not stored
+
+    enabled: bool = False
+    hour: int = 0  # UTC 0-23 (default midnight)
+    minute: int = 0  # 0-59
+    ecosystems: list[str] = Field(default_factory=lambda: list(ALL_ECOSYSTEMS))
+    limit: int = DEFAULT_LIMIT
+    timeout_minutes: int | None = 120  # None = no timeout; default 2 h
+    last_run_at: str | None = None  # ISO timestamp of last successful run (persisted)
+    next_run: str | None = None  # computed at read time, not stored
 
 
 # ── In-memory state ───────────────────────────────────────────────────────────
 
-_jobs:  Dict[str, IngestionJob]                 = {}
-_procs: Dict[str, asyncio.subprocess.Process]   = {}
+_jobs: dict[str, IngestionJob] = {}
+_procs: dict[str, asyncio.subprocess.Process] = {}
+# Strong references to fire-and-forget ingestion tasks so the event loop does not
+# garbage-collect them mid-run (RUF006). Each task removes itself on completion.
+_bg_tasks: set[asyncio.Task] = set()
 
-_stats_cache:    Optional[StatsResponse] = None
-_stats_cache_ts: float                   = 0.0
+
+def _track_bg(task: asyncio.Task) -> asyncio.Task:
+    _bg_tasks.add(task)
+    task.add_done_callback(_bg_tasks.discard)
+    return task
+
+
+_stats_cache: StatsResponse | None = None
+_stats_cache_ts: float = 0.0
 _STATS_TTL = 60.0
 
 # ── APScheduler ───────────────────────────────────────────────────────────────
@@ -151,7 +165,7 @@ def _record_last_run() -> None:
     """Stamp last_run_at in schedule_config.json after a successful ingestion."""
     try:
         cfg = _load_schedule()
-        cfg.last_run_at = datetime.now(timezone.utc).isoformat()
+        cfg.last_run_at = datetime.now(UTC).isoformat()
         _save_schedule(cfg)
     except Exception as exc:
         logger.warning("record_last_run_failed", error=str(exc))
@@ -178,7 +192,11 @@ async def _scheduled_ingest_job() -> None:
         return
     for job in _jobs.values():
         if job.status in ("pending", "running"):
-            logger.info("scheduled_ingest_skipped", reason="job_already_running", job_id=job.job_id)
+            logger.info(
+                "scheduled_ingest_skipped",
+                reason="job_already_running",
+                job_id=job.job_id,
+            )
             return
     if not COLLECTOR_SCRIPT.exists():
         logger.error("scheduled_ingest_skipped", reason="collector_not_found")
@@ -191,13 +209,11 @@ async def _scheduled_ingest_job() -> None:
         ecosystems=cfg.ecosystems,
         limit=cfg.limit,
         timeout_minutes=cfg.timeout_minutes,
-        started_at=datetime.now(timezone.utc).isoformat(),
+        started_at=datetime.now(UTC).isoformat(),
         triggered_by="schedule",
     )
     _jobs[job_id] = job
-    asyncio.create_task(
-        _run_ingestion(job_id, None, cfg.ecosystems, cfg.limit, cfg.timeout_minutes)
-    )
+    _track_bg(asyncio.create_task(_run_ingestion(job_id, None, cfg.ecosystems, cfg.limit, cfg.timeout_minutes)))
     logger.info("scheduled_ingest_triggered", job_id=job_id, ecosystems=cfg.ecosystems)
 
 
@@ -221,15 +237,13 @@ def start_scheduler() -> None:
 def _maybe_catchup(cfg: ScheduleConfig) -> None:
     """If the last scheduled run was missed while the server was down, run now."""
     if not cfg.last_run_at:
-        return   # never run before — don't auto-trigger on first startup
+        return  # never run before — don't auto-trigger on first startup
     try:
         last = datetime.fromisoformat(cfg.last_run_at)
-        hours_since = (datetime.now(timezone.utc) - last).total_seconds() / 3600
+        hours_since = (datetime.now(UTC) - last).total_seconds() / 3600
         if hours_since >= 25:
             logger.info("ingest_catchup_triggered", hours_since=round(hours_since, 1))
-            asyncio.get_event_loop().call_soon(
-                lambda: asyncio.ensure_future(_scheduled_ingest_job())
-            )
+            asyncio.get_event_loop().call_soon(lambda: asyncio.ensure_future(_scheduled_ingest_job()))
     except Exception as exc:
         logger.warning("catchup_check_failed", error=str(exc))
 
@@ -248,6 +262,7 @@ router = APIRouter(prefix="/mcp/v1/ingest", tags=["ingest"])
 
 # ── Stats ─────────────────────────────────────────────────────────────────────
 
+
 @router.get("/stats", response_model=StatsResponse)
 async def get_stats() -> StatsResponse:
     """Return current vector-store statistics (60 s TTL cache)."""
@@ -261,7 +276,7 @@ async def get_stats() -> StatsResponse:
         result = StatsResponse(
             total_entries=0,
             collector_available=False,
-            fetched_at=datetime.now(timezone.utc).isoformat(),
+            fetched_at=datetime.now(UTC).isoformat(),
         )
         _stats_cache = result
         _stats_cache_ts = now
@@ -269,7 +284,10 @@ async def get_stats() -> StatsResponse:
 
     try:
         proc = await asyncio.create_subprocess_exec(
-            "python3", str(COLLECTOR_SCRIPT), "--mode", "stats",
+            "python3",
+            str(COLLECTOR_SCRIPT),
+            "--mode",
+            "stats",
             cwd=str(COLLECTOR_DIR),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -281,14 +299,14 @@ async def get_stats() -> StatsResponse:
         result = StatsResponse(
             total_entries=count,
             collector_available=True,
-            fetched_at=datetime.now(timezone.utc).isoformat(),
+            fetched_at=datetime.now(UTC).isoformat(),
         )
     except Exception as exc:
         logger.warning("ingest_stats_failed", error=str(exc))
         result = StatsResponse(
             total_entries=0,
             collector_available=True,
-            fetched_at=datetime.now(timezone.utc).isoformat(),
+            fetched_at=datetime.now(UTC).isoformat(),
         )
 
     _stats_cache = result
@@ -302,6 +320,7 @@ def _invalidate_stats_cache() -> None:
 
 
 # ── Schedule endpoints ────────────────────────────────────────────────────────
+
 
 @router.get("/schedule", response_model=ScheduleConfig)
 async def get_schedule() -> ScheduleConfig:
@@ -317,27 +336,34 @@ async def get_schedule() -> ScheduleConfig:
 @router.put("/schedule", response_model=ScheduleConfig)
 async def update_schedule(body: ScheduleConfig) -> ScheduleConfig:
     """Update auto-schedule configuration and immediately apply to scheduler."""
-    body.hour   = max(0, min(23, body.hour))
+    body.hour = max(0, min(23, body.hour))
     body.minute = max(0, min(59, body.minute))
     if body.timeout_minutes is not None:
         body.timeout_minutes = max(10, min(1440, body.timeout_minutes))  # 10 min – 24 h
     _save_schedule(body)
     _apply_schedule(body)
-    logger.info("schedule_updated", enabled=body.enabled, hour=body.hour,
-                minute=body.minute, timeout_minutes=body.timeout_minutes)
+    logger.info(
+        "schedule_updated",
+        enabled=body.enabled,
+        hour=body.hour,
+        minute=body.minute,
+        timeout_minutes=body.timeout_minutes,
+    )
     return await get_schedule()
 
 
 # ── List jobs ─────────────────────────────────────────────────────────────────
 
-@router.get("", response_model=List[IngestionJob])
-async def list_jobs() -> List[IngestionJob]:
+
+@router.get("", response_model=list[IngestionJob])
+async def list_jobs() -> list[IngestionJob]:
     """Return last 10 jobs (most-recent first), each without full log lines."""
     ordered = sorted(_jobs.values(), key=lambda j: j.started_at or "", reverse=True)[:10]
     return [j.model_copy(update={"logs": j.logs[-5:]}) for j in ordered]
 
 
 # ── Start ingestion ───────────────────────────────────────────────────────────
+
 
 @router.post("/start", response_model=IngestionJob, status_code=202)
 async def start_ingestion(body: StartIngestionRequest) -> IngestionJob:
@@ -366,48 +392,59 @@ async def start_ingestion(body: StartIngestionRequest) -> IngestionJob:
         ecosystems=ecosystems,
         limit=max(1, min(body.limit, 100_000)),
         timeout_minutes=body.timeout_minutes,
-        started_at=datetime.now(timezone.utc).isoformat(),
+        started_at=datetime.now(UTC).isoformat(),
         triggered_by="manual",
     )
     _jobs[job_id] = job
-    asyncio.create_task(
-        _run_ingestion(job_id, body.github_token, ecosystems, body.limit,
-                       body.timeout_minutes, body.github_search_token)
+    _track_bg(
+        asyncio.create_task(
+            _run_ingestion(
+                job_id,
+                body.github_token,
+                ecosystems,
+                body.limit,
+                body.timeout_minutes,
+                body.github_search_token,
+            )
+        )
     )
-    logger.info("ingest_job_started", job_id=job_id, ecosystems=ecosystems,
-                limit=body.limit, timeout_minutes=body.timeout_minutes)
+    logger.info(
+        "ingest_job_started",
+        job_id=job_id,
+        ecosystems=ecosystems,
+        limit=body.limit,
+        timeout_minutes=body.timeout_minutes,
+    )
     return job
 
 
 async def _run_ingestion(
     job_id: str,
-    github_token: Optional[str],
-    ecosystems: List[str],
+    github_token: str | None,
+    ecosystems: list[str],
     limit: int,
-    timeout_minutes: Optional[int] = None,
-    github_search_token: Optional[str] = None,
+    timeout_minutes: int | None = None,
+    github_search_token: str | None = None,
 ) -> None:
     job = _jobs[job_id]
     job.status = "running"
 
     # ── Timeout watchdog ──────────────────────────────────────────────────────
-    watchdog_task: Optional[asyncio.Task] = None
+    watchdog_task: asyncio.Task | None = None
     if timeout_minutes and timeout_minutes > 0:
+
         async def _watchdog() -> None:
             await asyncio.sleep(timeout_minutes * 60)
             current = _jobs.get(job_id)
             if current and current.status == "running":
                 current.status = "cancelled"
-                current.error_message = (
-                    f"Auto-cancelled: exceeded {timeout_minutes} min time limit"
-                )
+                current.error_message = f"Auto-cancelled: exceeded {timeout_minutes} min time limit"
                 logger.warning("ingest_timeout", job_id=job_id, timeout_minutes=timeout_minutes)
                 proc = _procs.get(job_id)
                 if proc:
-                    try:
+                    with contextlib.suppress(Exception):
                         proc.terminate()
-                    except Exception:
-                        pass
+
         watchdog_task = asyncio.create_task(_watchdog())
 
     env = os.environ.copy()
@@ -424,10 +461,14 @@ async def _run_ingestion(
 
     try:
         proc = await asyncio.create_subprocess_exec(
-            "python3", str(COLLECTOR_SCRIPT),
-            "--mode", "bulk",
-            "--ecosystems", ",".join(ecosystems),
-            "--limit", str(limit),
+            "python3",
+            str(COLLECTOR_SCRIPT),
+            "--mode",
+            "bulk",
+            "--ecosystems",
+            ",".join(ecosystems),
+            "--limit",
+            str(limit),
             cwd=str(COLLECTOR_DIR),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
@@ -465,9 +506,13 @@ async def _run_ingestion(
         elif rc == 0:
             job.status = "completed"
             _invalidate_stats_cache()
-            _record_last_run()   # persist timestamp for catch-up logic on next startup
-            logger.info("ingest_job_completed", job_id=job_id,
-                        entries=job.entries_stored, processed=job.advisories_processed)
+            _record_last_run()  # persist timestamp for catch-up logic on next startup
+            logger.info(
+                "ingest_job_completed",
+                job_id=job_id,
+                entries=job.entries_stored,
+                processed=job.advisories_processed,
+            )
         else:
             job.status = "failed"
             job.error_message = f"Collector exited with code {rc}"
@@ -481,10 +526,11 @@ async def _run_ingestion(
     finally:
         if watchdog_task and not watchdog_task.done():
             watchdog_task.cancel()
-        job.completed_at = datetime.now(timezone.utc).isoformat()
+        job.completed_at = datetime.now(UTC).isoformat()
 
 
 # ── Get single job ────────────────────────────────────────────────────────────
+
 
 @router.get("/{job_id}", response_model=IngestionJob)
 async def get_job(job_id: str) -> IngestionJob:
@@ -494,6 +540,7 @@ async def get_job(job_id: str) -> IngestionJob:
 
 
 # ── Cancel job ────────────────────────────────────────────────────────────────
+
 
 @router.post("/{job_id}/cancel", response_model=IngestionJob)
 async def cancel_job(job_id: str) -> IngestionJob:
@@ -508,7 +555,7 @@ async def cancel_job(job_id: str) -> IngestionJob:
         )
 
     job.status = "cancelled"
-    job.completed_at = datetime.now(timezone.utc).isoformat()
+    job.completed_at = datetime.now(UTC).isoformat()
 
     proc = _procs.pop(job_id, None)
     if proc:
@@ -516,10 +563,8 @@ async def cancel_job(job_id: str) -> IngestionJob:
             proc.terminate()
             await asyncio.wait_for(proc.wait(), timeout=5)
         except Exception:
-            try:
+            with contextlib.suppress(Exception):
                 proc.kill()
-            except Exception:
-                pass
 
     logger.info("ingest_job_cancelled", job_id=job_id)
     return job

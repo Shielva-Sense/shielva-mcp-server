@@ -4,6 +4,7 @@ Both stubs in the legacy main.py; preserved here so callers don't
 404. Real implementations land when the connectors context moves
 into the new layer (out of scope for this slice).
 """
+
 from __future__ import annotations
 
 import os

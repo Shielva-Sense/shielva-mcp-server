@@ -1,6 +1,7 @@
 """
 Shielva MCP Server Registry Layer
 """
-from .tool_registry import ToolRegistry, RegisteredTool, create_registry_with_defaults
 
-__all__ = ["ToolRegistry", "RegisteredTool", "create_registry_with_defaults"]
+from .tool_registry import RegisteredTool, ToolRegistry, create_registry_with_defaults
+
+__all__ = ["RegisteredTool", "ToolRegistry", "create_registry_with_defaults"]

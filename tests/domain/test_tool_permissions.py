@@ -7,6 +7,7 @@ permission be present (AND semantics, not OR — adapters that want
 OR semantics should compose two Tool entries or one with no perms
 plus a server-side check).
 """
+
 from __future__ import annotations
 
 from src.domain.shared.tenant import TenantContext
@@ -16,17 +17,19 @@ from src.domain.tools.value_objects import ToolName, ToolSchema
 
 def _tenant(*perms: str) -> TenantContext:
     return TenantContext(
-        tenant_id="t1", user_id="u1", user_email="u@example.com",
+        tenant_id="t1",
+        user_id="u1",
+        user_email="u@example.com",
         permissions=tuple(perms),
     )
 
 
 def _tool(*required: str) -> Tool:
     return Tool(
-        name                 = ToolName("test_tool"),
-        description          = "x",
-        input_schema         = ToolSchema(json_schema={"type": "object"}),
-        required_permissions = tuple(required),
+        name=ToolName("test_tool"),
+        description="x",
+        input_schema=ToolSchema(json_schema={"type": "object"}),
+        required_permissions=tuple(required),
     )
 
 

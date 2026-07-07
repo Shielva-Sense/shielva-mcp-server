@@ -9,6 +9,7 @@ Once slice 4 lifts the remaining legacy callers, the legacy
 registry will be deleted and replaced by a clean adapter that
 registers tools through the new port directly.
 """
+
 from .legacy_registry_adapter import LegacyToolRegistryAdapter
 
 __all__ = ["LegacyToolRegistryAdapter"]

@@ -5,10 +5,11 @@ different latency/observability/auth profiles. Adapters MAY
 implement both interfaces on one class — many will — but the domain
 contract is two distinct ports.
 """
+
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from ..shared.tenant import TenantContext
 from .entities import Tool
@@ -19,7 +20,7 @@ class ToolCatalogue(ABC):
     """Read-side: what tools exist, and what's their schema."""
 
     @abstractmethod
-    async def list_for(self, tenant: TenantContext) -> List[Tool]:
+    async def list_for(self, tenant: TenantContext) -> list[Tool]:
         """Tools available to this tenant.
 
         Adapters filter by ``Tool.is_permitted_for(tenant)`` so the
@@ -28,7 +29,7 @@ class ToolCatalogue(ABC):
         """
 
     @abstractmethod
-    async def get(self, name: ToolName) -> Optional[Tool]:
+    async def get(self, name: ToolName) -> Tool | None:
         """Single tool by name. None when unknown. Permission check
         is the *executor's* responsibility — this is a pure lookup."""
 
@@ -40,10 +41,10 @@ class ToolExecutor(ABC):
     async def execute(
         self,
         *,
-        tool:      Tool,
-        arguments: Dict[str, Any],
-        tenant:    TenantContext,
-        context:   Optional[Dict[str, Any]] = None,
+        tool: Tool,
+        arguments: dict[str, Any],
+        tenant: TenantContext,
+        context: dict[str, Any] | None = None,
     ) -> ToolResult:
         """Run the tool. The adapter is responsible for:
 

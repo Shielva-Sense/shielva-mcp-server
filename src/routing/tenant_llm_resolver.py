@@ -16,11 +16,11 @@ Design notes:
   • The plaintext key lives only in the in-process cache for tenant_llm_cache_ttl
     seconds and is never logged.
 """
+
 from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from typing import Dict, Optional, Tuple
 
 import httpx
 import structlog
@@ -32,14 +32,14 @@ settings = get_settings()
 
 # provider key (as stored by shielva-platform) → (litellm model template, api_base)
 # DeepSeek + Kimi/Moonshot are OpenAI-compatible → openai/ prefix + custom base.
-_PROVIDER_MAP: Dict[str, Tuple[str, Optional[str]]] = {
-    "gemini":   ("gemini/{model}",    None),
-    "claude":   ("anthropic/{model}", None),
-    "openai":   ("openai/{model}",    None),
-    "groq":     ("groq/{model}",      None),
-    "mistral":  ("mistral/{model}",   None),
-    "deepseek": ("openai/{model}",    "https://api.deepseek.com/v1"),
-    "kimi":     ("openai/{model}",    "https://api.moonshot.cn/v1"),
+_PROVIDER_MAP: dict[str, tuple[str, str | None]] = {
+    "gemini": ("gemini/{model}", None),
+    "claude": ("anthropic/{model}", None),
+    "openai": ("openai/{model}", None),
+    "groq": ("groq/{model}", None),
+    "mistral": ("mistral/{model}", None),
+    "deepseek": ("openai/{model}", "https://api.deepseek.com/v1"),
+    "kimi": ("openai/{model}", "https://api.moonshot.cn/v1"),
 }
 
 
@@ -57,10 +57,11 @@ def format_model_for_provider(provider: str, model: str) -> str:
 @dataclass
 class ResolvedLLM:
     """A tenant's resolved routing target."""
-    model: str                      # LiteLLM model string, e.g. "openai/gpt-4o"
-    api_key: Optional[str]          # decrypted BYOK key (may be None)
-    api_base: Optional[str] = None  # for OpenAI-compatible providers
-    provider: str = ""              # raw provider key (e.g. "gemini") — used to format per-bot overrides
+
+    model: str  # LiteLLM model string, e.g. "openai/gpt-4o"
+    api_key: str | None  # decrypted BYOK key (may be None)
+    api_base: str | None = None  # for OpenAI-compatible providers
+    provider: str = ""  # raw provider key (e.g. "gemini") — used to format per-bot overrides
 
 
 class TenantLLMResolver:
@@ -68,14 +69,14 @@ class TenantLLMResolver:
 
     def __init__(self) -> None:
         # tenant_id → (fetched_at_monotonic, resolved-or-None)
-        self._cache: Dict[str, Tuple[float, Optional[ResolvedLLM]]] = {}
+        self._cache: dict[str, tuple[float, ResolvedLLM | None]] = {}
         self._ttl = max(0, settings.tenant_llm_cache_ttl)
         self._url = settings.platform_internal_url.rstrip("/")
         self._token = settings.platform_internal_token.get_secret_value()
         self._verify = settings.tenant_llm_verify_tls
         # One reused client (keep-alive pool) instead of a fresh TLS handshake on
         # every cache miss — this sits on the critical path before the LLM call.
-        self._client: Optional[httpx.AsyncClient] = None
+        self._client: httpx.AsyncClient | None = None
 
     def _http(self) -> httpx.AsyncClient:
         if self._client is None:
@@ -86,7 +87,7 @@ class TenantLLMResolver:
     def enabled(self) -> bool:
         return bool(self._url and self._token)
 
-    async def resolve(self, tenant_id: Optional[str]) -> Optional[ResolvedLLM]:
+    async def resolve(self, tenant_id: str | None) -> ResolvedLLM | None:
         """Return the tenant's routing target, or None to use the default."""
         if not tenant_id or not self.enabled:
             return None
@@ -103,7 +104,7 @@ class TenantLLMResolver:
     def invalidate(self, tenant_id: str) -> None:
         self._cache.pop(tenant_id, None)
 
-    async def _fetch(self, tenant_id: str) -> Optional[ResolvedLLM]:
+    async def _fetch(self, tenant_id: str) -> ResolvedLLM | None:
         try:
             resp = await self._http().get(
                 f"{self._url}/internal/llm/resolve",
@@ -112,7 +113,9 @@ class TenantLLMResolver:
             )
         except Exception as exc:  # network / TLS / timeout — degrade to default
             logger.warning(
-                "tenant_llm_resolve_failed", tenant_id=tenant_id, error=type(exc).__name__
+                "tenant_llm_resolve_failed",
+                tenant_id=tenant_id,
+                error=type(exc).__name__,
             )
             return None
 
@@ -120,7 +123,9 @@ class TenantLLMResolver:
             return None
         if resp.status_code != 200:
             logger.warning(
-                "tenant_llm_resolve_non_200", tenant_id=tenant_id, status=resp.status_code
+                "tenant_llm_resolve_non_200",
+                tenant_id=tenant_id,
+                status=resp.status_code,
             )
             return None
 
@@ -130,14 +135,12 @@ class TenantLLMResolver:
             return None
         return self._map(tenant_id, data)
 
-    def _map(self, tenant_id: str, data: dict) -> Optional[ResolvedLLM]:
+    def _map(self, tenant_id: str, data: dict) -> ResolvedLLM | None:
         provider = str(data.get("provider") or "").lower()
         model = str(data.get("model") or "")
         spec = _PROVIDER_MAP.get(provider)
         if spec is None or not model:
-            logger.warning(
-                "tenant_llm_unmapped_provider", tenant_id=tenant_id, provider=provider
-            )
+            logger.warning("tenant_llm_unmapped_provider", tenant_id=tenant_id, provider=provider)
             return None
         template, api_base = spec
         # Do NOT log api_key.
@@ -150,7 +153,7 @@ class TenantLLMResolver:
 
 
 # Module-level singleton — one cache shared across all router instances.
-_resolver: Optional[TenantLLMResolver] = None
+_resolver: TenantLLMResolver | None = None
 
 
 def get_tenant_llm_resolver() -> TenantLLMResolver:

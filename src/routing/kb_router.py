@@ -8,20 +8,21 @@ from Vectorless RAG: direct the query to the right index before retrieval.
 
 Falls back to all KBs if routing fails or only 1 KB is configured.
 """
+
 from __future__ import annotations
 
 import hashlib
 import math
-from typing import List, Dict, Any, Optional, Tuple
+from typing import Any
 
 import structlog
 
 logger = structlog.get_logger(__name__)
 
 
-def _cosine(a: List[float], b: List[float]) -> float:
+def _cosine(a: list[float], b: list[float]) -> float:
     """Cosine similarity between two vectors."""
-    dot = sum(x * y for x, y in zip(a, b))
+    dot = sum(x * y for x, y in zip(a, b, strict=False))
     norm_a = math.sqrt(sum(x * x for x in a))
     norm_b = math.sqrt(sum(y * y for y in b))
     if norm_a == 0 or norm_b == 0:
@@ -50,10 +51,10 @@ class KBRouter:
         # naturally re-embeds while a stable one is reused for the process'
         # lifetime. Embedding vectors are not secrets and are tenant-agnostic
         # at the descriptor level (the kb_id namespaces them).
-        self._descriptor_cache: Dict[Tuple[str, str], List[float]] = {}
+        self._descriptor_cache: dict[tuple[str, str], list[float]] = {}
 
     @staticmethod
-    def _descriptor_for(kb: Dict[str, Any]) -> str:
+    def _descriptor_for(kb: dict[str, Any]) -> str:
         """Build the short text descriptor used to embed a KB."""
         name = kb.get("name", "")
         desc = kb.get("description", "")
@@ -62,9 +63,9 @@ class KBRouter:
     async def route(
         self,
         query: str,
-        kb_configs: List[Dict[str, Any]],
-        query_embedding: Optional[List[float]] = None,
-    ) -> List[str]:
+        kb_configs: list[dict[str, Any]],
+        query_embedding: list[float] | None = None,
+    ) -> list[str]:
         """
         Return the IDs of the top-N KBs most relevant to `query`.
 
@@ -88,9 +89,9 @@ class KBRouter:
     async def route_with_embedding(
         self,
         query: str,
-        kb_configs: List[Dict[str, Any]],
-        query_embedding: Optional[List[float]] = None,
-    ) -> Tuple[List[str], Optional[List[float]]]:
+        kb_configs: list[dict[str, Any]],
+        query_embedding: list[float] | None = None,
+    ) -> tuple[list[str], list[float] | None]:
         """Like :meth:`route` but also returns the query embedding that was
         used (computed here when not supplied). Lets the caller reuse the one
         vector for downstream vector search (FIX #5)."""
@@ -101,17 +102,15 @@ class KBRouter:
 
         # Resolve the descriptors, splitting into cached vs. needs-embedding.
         descriptors = [self._descriptor_for(kb) for kb in kb_configs]
-        cache_keys: List[Tuple[str, str]] = [
+        cache_keys: list[tuple[str, str]] = [
             (kb.get("id", ""), hashlib.sha256(d.encode()).hexdigest())
-            for kb, d in zip(kb_configs, descriptors)
+            for kb, d in zip(kb_configs, descriptors, strict=False)
         ]
-        missing_idx = [
-            i for i, key in enumerate(cache_keys) if key not in self._descriptor_cache
-        ]
+        missing_idx = [i for i, key in enumerate(cache_keys) if key not in self._descriptor_cache]
 
         # Build the single batched embed call: the query (only if we don't
         # already have it) + any uncached descriptors.
-        texts_to_embed: List[str] = []
+        texts_to_embed: list[str] = []
         need_query = query_embedding is None
         if need_query:
             texts_to_embed.append(query)
@@ -141,7 +140,7 @@ class KBRouter:
 
         # Score each KB against the (now fully-cached) descriptor vectors.
         scored = []
-        for kb, key in zip(kb_configs, cache_keys):
+        for kb, key in zip(kb_configs, cache_keys, strict=False):
             vec = self._descriptor_cache.get(key)
             if vec is None:
                 continue

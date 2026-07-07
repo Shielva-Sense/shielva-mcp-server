@@ -8,10 +8,10 @@ We use abstract base classes (``Protocol`` would also work, but ABC
 gives clearer error messages on missing methods and supports
 ``isinstance`` checks in tests).
 """
+
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Optional
 
 from .entities import Session
 from .value_objects import SessionId
@@ -32,7 +32,7 @@ class ChatSessionRepository(ABC):
     """
 
     @abstractmethod
-    async def get(self, session_id: SessionId) -> Optional[Session]:
+    async def get(self, session_id: SessionId) -> Session | None:
         """Return the session by id, or None if unknown.
 
         Adapters are responsible for refusing cross-tenant access:

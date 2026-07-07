@@ -15,14 +15,15 @@ Permissions look-ups are delegated to
 ``MongoUserConfigRepository`` via ``get_user_config_repo()`` — no
 inline DB calls here.
 """
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
 import structlog
 from fastapi import Depends, Request
-
 from shielva_common.auth import Principal, require_principal
+
 from src.domain.shared.tenant import TenantContext as DomainTenant
 from src.infrastructure.persistence.mongo_user_config_repository import (
     MongoUserConfigRepository,
@@ -38,7 +39,7 @@ logger = structlog.get_logger(__name__)
 async def get_tenant_context(
     request: Request,
     user_config_repo: MongoUserConfigRepository = Depends(get_user_config_repo),
-) -> "LegacyTenant":
+) -> LegacyTenant:
     """Extract tenant context from gateway-verified headers and fetch
     permissions from MongoDB.
 
@@ -50,17 +51,14 @@ async def get_tenant_context(
     principal: Principal = require_principal(request)
     permissions = await user_config_repo.get_permissions(principal.email)
 
-    role = (
-        request.headers.get("X-Shielva-Roles")
-        or request.headers.get("X-User-Role", "Customer_Basic")
-    )
+    role = request.headers.get("X-Shielva-Roles") or request.headers.get("X-User-Role", "Customer_Basic")
 
     return LegacyTenant(
-        tenant_id   = principal.tenant_id,
-        user_id     = principal.user_id,
-        user_email  = principal.email,
-        role        = role,
-        permissions = permissions,
+        tenant_id=principal.tenant_id,
+        user_id=principal.user_id,
+        user_email=principal.email,
+        role=role,
+        permissions=permissions,
     )
 
 
@@ -72,15 +70,12 @@ async def get_domain_tenant(
     principal: Principal = require_principal(request)
     permissions = await user_config_repo.get_permissions(principal.email)
 
-    role = (
-        request.headers.get("X-Shielva-Roles")
-        or request.headers.get("X-User-Role", "Customer_Basic")
-    )
+    role = request.headers.get("X-Shielva-Roles") or request.headers.get("X-User-Role", "Customer_Basic")
 
     return DomainTenant(
-        tenant_id   = principal.tenant_id,
-        user_id     = principal.user_id,
-        user_email  = principal.email,
-        role        = role,
-        permissions = tuple(permissions),
+        tenant_id=principal.tenant_id,
+        user_id=principal.user_id,
+        user_email=principal.email,
+        role=role,
+        permissions=tuple(permissions),
     )

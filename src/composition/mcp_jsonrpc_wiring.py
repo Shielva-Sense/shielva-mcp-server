@@ -17,6 +17,7 @@ Why a wiring module (not a DI framework):
     (dependency-injector, lagom, …) would obscure what we're
     composing without adding meaningful safety.
 """
+
 from __future__ import annotations
 
 import os
@@ -27,15 +28,15 @@ from fastapi import APIRouter
 from src.application.chat import ChatApplicationService
 from src.infrastructure.persistence import InMemoryChatSessionRepository
 from src.interface.mcp_jsonrpc.dispatcher import (
-    MCPDispatcher, PROTOCOL_VERSION,
+    PROTOCOL_VERSION,
+    MCPDispatcher,
 )
 from src.interface.mcp_jsonrpc.transport import build_router
 
-
 # Process-wide singletons. Tests construct their own instances.
 _chat_repository: InMemoryChatSessionRepository | None = None
-_chat_service:    ChatApplicationService          | None = None
-_dispatcher:      MCPDispatcher                   | None = None
+_chat_service: ChatApplicationService | None = None
+_dispatcher: MCPDispatcher | None = None
 
 
 def _make_session_id() -> str:
@@ -58,12 +59,12 @@ def build_mcp_jsonrpc_router() -> APIRouter:
     if _dispatcher is None:
         _chat_repository = InMemoryChatSessionRepository()
         _chat_service = ChatApplicationService(
-            repository                 = _chat_repository,
-            session_id_factory         = _make_session_id,
-            server_protocol_version    = PROTOCOL_VERSION,
+            repository=_chat_repository,
+            session_id_factory=_make_session_id,
+            server_protocol_version=PROTOCOL_VERSION,
         )
         _dispatcher = MCPDispatcher(
-            chat_service   = _chat_service,
-            server_version = _server_version(),
+            chat_service=_chat_service,
+            server_version=_server_version(),
         )
     return build_router(_dispatcher)

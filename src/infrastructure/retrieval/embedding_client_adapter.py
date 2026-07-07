@@ -5,9 +5,8 @@ Same Gemini / OpenAI / Cohere fan-out under the hood — the adapter
 just translates dataclass shapes and exposes ``dimension`` / ``model``
 as port-level properties for tools that need to size collections.
 """
-from __future__ import annotations
 
-from typing import List
+from __future__ import annotations
 
 from src.domain.knowledge.repositories import EmbeddingClient
 
@@ -18,7 +17,7 @@ class LegacyEmbeddingClientAdapter(EmbeddingClient):
         # instance constructed in main.py lifespan.
         self._legacy = legacy_client
 
-    async def embed(self, texts: List[str]) -> List[List[float]]:
+    async def embed(self, texts: list[str]) -> list[list[float]]:
         return await self._legacy.embed(texts)
 
     @property

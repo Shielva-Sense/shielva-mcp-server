@@ -6,6 +6,7 @@ via ``uvicorn src.main:app`` with ``cwd=mcp-server``). For pytest
 to resolve ``import src.domain...`` we need the project root on
 ``sys.path``. Hook it here once.
 """
+
 from __future__ import annotations
 
 import sys

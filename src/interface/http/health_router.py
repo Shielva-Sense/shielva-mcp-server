@@ -5,9 +5,8 @@ operational surfaces that orchestrators (k8s, gateway health checks)
 poll on the bare path. Kept here for visibility into what the
 service exposes; no auth (probes are infra-level).
 """
-from __future__ import annotations
 
-import os
+from __future__ import annotations
 
 from fastapi import APIRouter, Request, Response
 
@@ -21,7 +20,7 @@ health_router = APIRouter(tags=["health"])
 @health_router.get("/health")
 async def health() -> dict:
     return {
-        "status":  "healthy",
+        "status": "healthy",
         "service": "mcp-server",
         "version": _settings.app_version,
     }
@@ -36,11 +35,11 @@ async def ready(request: Request) -> dict:
     return {
         "status": "ready",
         "components": {
-            "tool_app_service":      hasattr(state, "tool_app_service"),
+            "tool_app_service": hasattr(state, "tool_app_service"),
             "knowledge_app_service": hasattr(state, "knowledge_app_service"),
-            "llm_app_service":       hasattr(state, "llm_app_service"),
-            "bot_app_service":       hasattr(state, "bot_app_service"),
-            "policy_app_service":    hasattr(state, "policy_app_service"),
+            "llm_app_service": hasattr(state, "llm_app_service"),
+            "bot_app_service": hasattr(state, "bot_app_service"),
+            "policy_app_service": hasattr(state, "policy_app_service"),
             "handle_query_use_case": hasattr(state, "handle_query_use_case"),
         },
     }
@@ -56,7 +55,8 @@ async def metrics() -> Response:
     new telemetry goes through sop_sdk's API, not raw
     prometheus_client (see the durable rule in memory)."""
     try:
-        from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
+        from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+
         return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
     except ImportError:
         return Response(

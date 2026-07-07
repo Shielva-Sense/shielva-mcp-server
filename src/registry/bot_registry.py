@@ -1,6 +1,7 @@
 import copy
 import time
-from typing import Dict, Any, Optional, Tuple
+from typing import Any
+
 import structlog
 
 logger = structlog.get_logger(__name__)
@@ -13,6 +14,7 @@ class BotRegistry:
     Registry for bot configurations.
     Fetches actual bot data from MongoDB.
     """
+
     def __init__(self, mongodb_client=None):
         self.mongodb_client = mongodb_client
         self.settings = get_settings()
@@ -24,10 +26,10 @@ class BotRegistry:
         # tenants. Mirrors the monotonic-time + dict TTL pattern in
         # tenant_llm_resolver. Stores a copy so callers mutating the returned
         # dict can't corrupt the cached entry.
-        self._cache: Dict[Tuple[str, str], Tuple[float, Dict[str, Any]]] = {}
+        self._cache: dict[tuple[str, str], tuple[float, dict[str, Any]]] = {}
         self._cache_ttl = max(0, getattr(self.settings, "bot_cache_ttl_seconds", 45))
 
-    async def _find_customer(self, tenant_id: str) -> Optional[Dict[str, Any]]:
+    async def _find_customer(self, tenant_id: str) -> dict[str, Any] | None:
         """Fetch the customer document for *tenant_id* from the
         ``customerService`` collection.  Returns ``None`` when no match
         is found or when the MongoDB client is not initialised.
@@ -43,7 +45,7 @@ class BotRegistry:
         Mongo instead of serving stale config for up to the TTL window."""
         self._cache.pop((tenant_id, bot_id), None)
 
-    async def get_bot(self, bot_id: str, tenant_id: str) -> Dict[str, Any]:
+    async def get_bot(self, bot_id: str, tenant_id: str) -> dict[str, Any]:
         """
         Get bot configuration by ID and tenant from CustomerProfile.customerService.
         """
@@ -65,19 +67,19 @@ class BotRegistry:
             if not customer:
                 logger.warning("Customer not found for tenant", tenant_id=tenant_id)
                 return self._get_mock_bot(bot_id)
-                
+
             # Find specific bot in bots array
             bots = customer.get("bots", [])
             bot = next((b for b in bots if b.get("id") == bot_id), None)
-            
+
             if not bot:
                 logger.warning("Bot not found in customer profile", bot_id=bot_id)
                 return self._get_mock_bot(bot_id)
-            
+
             # Ensure kb_ids is present and formatted correctly
             # ShielvaAPI might store them as 'kbs' or 'kb_ids'
             # In ShielvaAPI/api/bots.py it pushes to 'bots.$.kbs'
-            
+
             # Extract this bot's DIRECT KB IDs (core-api pushes id strings to
             # bots.$.kbs; older docs may use dicts or a kb_ids field).
             kb_ids = []
@@ -101,7 +103,12 @@ class BotRegistry:
             bot["kb_ids"] = kb_ids
             bot["kbs"] = kb_ids  # keep kbs aligned with the resolved set for retrieval
 
-            logger.info("Fetched bot config", bot_id=bot_id, name=bot.get("name"), kb_count=len(kb_ids))
+            logger.info(
+                "Fetched bot config",
+                bot_id=bot_id,
+                name=bot.get("name"),
+                kb_count=len(kb_ids),
+            )
 
             # FIX #7: cache the successfully resolved config (never the mock
             # fallback — we don't want to pin a transient DB error for the TTL).
@@ -109,24 +116,26 @@ class BotRegistry:
                 self._cache[cache_key] = (time.monotonic(), copy.deepcopy(bot))
 
             return bot
-            
+
         except Exception as e:
             logger.error("Error fetching bot from MongoDB", error=str(e))
             return self._get_mock_bot(bot_id)
 
     @staticmethod
-    def _resolve_effective_kb_ids(customer: Dict[str, Any], bot: Dict[str, Any], direct_kb_ids: list) -> list:
+    def _resolve_effective_kb_ids(customer: dict[str, Any], bot: dict[str, Any], direct_kb_ids: list) -> list:
         """Expand a bot's direct KBs with KB-groups and bot-groups it belongs to.
 
         Effective = direct ∪ KBs of the bot's kb_group_ids ∪ (for each bot-group
         containing this bot) that group's direct kbs + its kb_groups' KBs.
         Order-preserving + de-duped. Pure function over the customer doc.
         """
+
         def _clean(ids) -> list:
             seen, out = set(), []
             for x in ids or []:
                 if isinstance(x, str) and x.strip() and x not in seen:
-                    seen.add(x); out.append(x)
+                    seen.add(x)
+                    out.append(x)
             return out
 
         kb_groups = {g.get("group_id"): g for g in (customer.get("kb_groups") or [])}
@@ -155,7 +164,7 @@ class BotRegistry:
                     _expand(gid)
         return effective
 
-    def _get_mock_bot(self, bot_id: str) -> Dict[str, Any]:
+    def _get_mock_bot(self, bot_id: str) -> dict[str, Any]:
         """Fallback mock bot"""
         return {
             "id": bot_id,
@@ -163,11 +172,8 @@ class BotRegistry:
             "description": "Auto-generated bot configuration (DB Error)",
             "prompt_config": {
                 "system_prompt": "You are a helpful AI assistant. Answer questions clearly and accurately based on the provided context.",
-                "tool_instructions": "Use available tools if the user question requires specialized actions."
+                "tool_instructions": "Use available tools if the user question requires specialized actions.",
             },
             "kb_ids": [],
-            "model_config": {
-                "model": "gemini-1.5-pro",
-                "temperature": 0.1
-            }
+            "model_config": {"model": "gemini-1.5-pro", "temperature": 0.1},
         }

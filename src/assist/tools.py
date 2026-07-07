@@ -4,14 +4,14 @@ Shielva Assist — Tool Definitions & Executors
 Defines the tools Claude can call to read data, create resources,
 and control the CMS UI.
 """
-from typing import Dict, Any, List, Optional
-from datetime import datetime, timezone
+
 import os
+from typing import Any
 
 import httpx
 import structlog
-
 from shielva_common.tls import internal_ca_verify
+
 from src.routing.llm_router import ToolSpec
 
 logger = structlog.get_logger(__name__)
@@ -20,6 +20,7 @@ CMS_CORE_URL = os.getenv("CMS_CORE_URL", "https://localhost:8020/api/v1/cms")
 
 
 # ── Tool Handlers ─────────────────────────────────────────────────────
+
 
 async def _cms_get(path: str, params: dict = None) -> Any:
     async with httpx.AsyncClient(verify=internal_ca_verify(), timeout=10.0) as c:
@@ -43,6 +44,7 @@ async def _cms_put(path: str, body: dict) -> Any:
 
 
 # ── Read Tools ────────────────────────────────────────────────────────
+
 
 async def handle_list_intents(tenant_id: str, **kw) -> dict:
     """List all intents for the tenant."""
@@ -76,6 +78,7 @@ async def handle_get_unmatched_signals(tenant_id: str, limit: int = 20, **kw) ->
 
 
 # ── Write Tools ───────────────────────────────────────────────────────
+
 
 async def handle_create_intent(
     tenant_id: str,
@@ -172,6 +175,7 @@ async def handle_toggle_intent(intent_id: str, enabled: bool, **kw) -> dict:
 # These don't execute server-side — they return action descriptors
 # that the frontend executes as ClientActions.
 
+
 async def handle_open_intent_form(
     prefill: dict = None,
     auto_save: bool = False,
@@ -218,7 +222,7 @@ async def handle_highlight_element(selector: str, **kw) -> dict:
 
 # ── Tool Specs (for LLMRouter) ───────────────────────────────────────
 
-ASSIST_TOOLS: List[ToolSpec] = [
+ASSIST_TOOLS: list[ToolSpec] = [
     # Read tools
     ToolSpec(
         name="list_intents",
@@ -272,13 +276,16 @@ ASSIST_TOOLS: List[ToolSpec] = [
             "type": "object",
             "properties": {
                 "tenant_id": {"type": "string", "description": "The tenant ID"},
-                "limit": {"type": "integer", "description": "Max results", "default": 20},
+                "limit": {
+                    "type": "integer",
+                    "description": "Max results",
+                    "default": 20,
+                },
             },
             "required": ["tenant_id"],
         },
         handler=handle_get_unmatched_signals,
     ),
-
     # Write tools
     ToolSpec(
         name="create_intent",
@@ -287,16 +294,33 @@ ASSIST_TOOLS: List[ToolSpec] = [
             "type": "object",
             "properties": {
                 "tenant_id": {"type": "string", "description": "The tenant ID"},
-                "label": {"type": "string", "description": "Human-readable label (e.g. 'Check Balance')"},
-                "intent_id": {"type": "string", "description": "Unique slug in snake_case (e.g. 'check_balance')"},
+                "label": {
+                    "type": "string",
+                    "description": "Human-readable label (e.g. 'Check Balance')",
+                },
+                "intent_id": {
+                    "type": "string",
+                    "description": "Unique slug in snake_case (e.g. 'check_balance')",
+                },
                 "examples": {
                     "type": "array",
                     "items": {"type": "string"},
                     "description": "3-10 example phrases users might say",
                 },
-                "description": {"type": "string", "description": "What this intent represents"},
-                "risk_level": {"type": "string", "enum": ["low", "medium", "high", "critical"], "default": "low"},
-                "priority": {"type": "integer", "description": "0-100, higher = matched first", "default": 50},
+                "description": {
+                    "type": "string",
+                    "description": "What this intent represents",
+                },
+                "risk_level": {
+                    "type": "string",
+                    "enum": ["low", "medium", "high", "critical"],
+                    "default": "low",
+                },
+                "priority": {
+                    "type": "integer",
+                    "description": "0-100, higher = matched first",
+                    "default": 50,
+                },
             },
             "required": ["tenant_id", "label", "intent_id", "examples"],
         },
@@ -312,7 +336,11 @@ ASSIST_TOOLS: List[ToolSpec] = [
                 "name": {"type": "string", "description": "Rule name"},
                 "pattern": {"type": "string", "description": "The pattern to match"},
                 "intent_id": {"type": "string", "description": "Intent to map to"},
-                "rule_type": {"type": "string", "enum": ["exact", "regex", "keyword", "ngram"], "default": "keyword"},
+                "rule_type": {
+                    "type": "string",
+                    "enum": ["exact", "regex", "keyword", "ngram"],
+                    "default": "keyword",
+                },
                 "priority": {"type": "integer", "default": 50},
             },
             "required": ["tenant_id", "name", "pattern"],
@@ -327,8 +355,14 @@ ASSIST_TOOLS: List[ToolSpec] = [
             "properties": {
                 "tenant_id": {"type": "string"},
                 "label": {"type": "string", "description": "Human-readable label"},
-                "rule_id": {"type": "string", "description": "Unique slug in snake_case"},
-                "action": {"type": "string", "description": "Action to take when condition matches"},
+                "rule_id": {
+                    "type": "string",
+                    "description": "Unique slug in snake_case",
+                },
+                "action": {
+                    "type": "string",
+                    "description": "Action to take when condition matches",
+                },
                 "condition": {"type": "object", "description": "JSON condition logic"},
                 "priority": {"type": "integer", "default": 50},
             },
@@ -336,7 +370,6 @@ ASSIST_TOOLS: List[ToolSpec] = [
         },
         handler=handle_create_decision_rule,
     ),
-
     # DOM tools
     ToolSpec(
         name="open_intent_form",
@@ -348,7 +381,11 @@ ASSIST_TOOLS: List[ToolSpec] = [
                     "type": "object",
                     "description": "Fields to pre-fill: intent_id, label, examples, risk_level, priority, description",
                 },
-                "auto_save": {"type": "boolean", "description": "Auto-submit the form after filling", "default": False},
+                "auto_save": {
+                    "type": "boolean",
+                    "description": "Auto-submit the form after filling",
+                    "default": False,
+                },
             },
         },
         handler=handle_open_intent_form,
@@ -372,7 +409,11 @@ ASSIST_TOOLS: List[ToolSpec] = [
             "type": "object",
             "properties": {
                 "message": {"type": "string"},
-                "variant": {"type": "string", "enum": ["success", "error", "info"], "default": "success"},
+                "variant": {
+                    "type": "string",
+                    "enum": ["success", "error", "info"],
+                    "default": "success",
+                },
             },
             "required": ["message"],
         },

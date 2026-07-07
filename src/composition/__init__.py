@@ -11,7 +11,8 @@ that ``main.py``'s lifespan calls after the legacy infra singletons
 are constructed. Together the two functions own the entire new-
 layer wiring graph.
 """
+
 from .mcp_jsonrpc_wiring import build_mcp_jsonrpc_router
-from .wire_use_cases     import wire_use_cases
+from .wire_use_cases import wire_use_cases
 
 __all__ = ["build_mcp_jsonrpc_router", "wire_use_cases"]
