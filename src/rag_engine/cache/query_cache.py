@@ -2,6 +2,7 @@
 RAG Engine - Query Cache
 Caches query results to improve performance and reduce costs.
 """
+
 import hashlib
 import json
 from abc import ABC, abstractmethod
@@ -17,6 +18,7 @@ logger = structlog.get_logger(__name__)
 @dataclass
 class CachedResult:
     """Cached query result"""
+
     query_hash: str
     results: list[dict[str, Any]]
     metadata: dict[str, Any]
@@ -37,13 +39,7 @@ class QueryCache(ABC):
         """Get cached result."""
 
     @abstractmethod
-    async def set(
-        self,
-        query_hash: str,
-        results: list[Any],
-        metadata: dict[str, Any],
-        ttl_seconds: int
-    ) -> None:
+    async def set(self, query_hash: str, results: list[Any], metadata: dict[str, Any], ttl_seconds: int) -> None:
         """Set cache entry."""
 
     @abstractmethod
@@ -55,12 +51,7 @@ class QueryCache(ABC):
         """Clear all cache entries."""
 
     @staticmethod
-    def hash_query(
-        query: str,
-        tenant_id: str,
-        kb_ids: list[str],
-        top_k: int = 10
-    ) -> str:
+    def hash_query(query: str, tenant_id: str, kb_ids: list[str], top_k: int = 10) -> str:
         """
         Generate hash for query cache key.
 
@@ -73,12 +64,7 @@ class QueryCache(ABC):
         Returns:
             Hash string
         """
-        cache_key = {
-            "query": query.lower().strip(),
-            "tenant_id": tenant_id,
-            "kb_ids": sorted(kb_ids),
-            "top_k": top_k
-        }
+        cache_key = {"query": query.lower().strip(), "tenant_id": tenant_id, "kb_ids": sorted(kb_ids), "top_k": top_k}
         key_str = json.dumps(cache_key, sort_keys=True)
         return hashlib.sha256(key_str.encode()).hexdigest()
 
@@ -125,13 +111,7 @@ class InMemoryCache(QueryCache):
         logger.debug("Cache miss", query_hash=query_hash)
         return None
 
-    async def set(
-        self,
-        query_hash: str,
-        results: list[Any],
-        metadata: dict[str, Any],
-        ttl_seconds: int = 3600
-    ) -> None:
+    async def set(self, query_hash: str, results: list[Any], metadata: dict[str, Any], ttl_seconds: int = 3600) -> None:
         """Set cache entry."""
         # Evict if at max size
         if len(self._cache) >= self.max_size and query_hash not in self._cache:
@@ -142,10 +122,7 @@ class InMemoryCache(QueryCache):
                 logger.debug("Evicted LRU entry", query_hash=lru_key)
 
         # Serialize results
-        serialized_results = [
-            asdict(r) if hasattr(r, '__dataclass_fields__') else r
-            for r in results
-        ]
+        serialized_results = [asdict(r) if hasattr(r, "__dataclass_fields__") else r for r in results]
 
         # Create cache entry
         cached = CachedResult(
@@ -153,7 +130,7 @@ class InMemoryCache(QueryCache):
             results=serialized_results,
             metadata=metadata,
             cached_at=datetime.utcnow(),
-            ttl_seconds=ttl_seconds
+            ttl_seconds=ttl_seconds,
         )
 
         self._cache[query_hash] = cached
@@ -163,12 +140,7 @@ class InMemoryCache(QueryCache):
             self._access_order.remove(query_hash)
         self._access_order.append(query_hash)
 
-        logger.debug(
-            "Cache entry set",
-            query_hash=query_hash,
-            num_results=len(results),
-            ttl=ttl_seconds
-        )
+        logger.debug("Cache entry set", query_hash=query_hash, num_results=len(results), ttl=ttl_seconds)
 
     async def delete(self, query_hash: str) -> None:
         """Delete cache entry."""
@@ -190,7 +162,7 @@ class InMemoryCache(QueryCache):
         return {
             "size": len(self._cache),
             "max_size": self.max_size,
-            "utilization": len(self._cache) / self.max_size if self.max_size > 0 else 0
+            "utilization": len(self._cache) / self.max_size if self.max_size > 0 else 0,
         }
 
 
@@ -205,7 +177,7 @@ class RedisCache(QueryCache):
         self,
         redis_url: str = "redis://localhost:6379",
         key_prefix: str = "shielva:query_cache:",
-        default_ttl: int = 3600
+        default_ttl: int = 3600,
     ):
         """
         Initialize Redis cache.
@@ -227,6 +199,7 @@ class RedisCache(QueryCache):
         if self.redis is None:
             try:
                 import redis.asyncio as redis
+
                 self.redis = await redis.from_url(self.redis_url, decode_responses=True)
                 logger.info("Redis client connected")
             except ImportError:
@@ -256,7 +229,7 @@ class RedisCache(QueryCache):
                     results=cached_data["results"],
                     metadata=cached_data["metadata"],
                     cached_at=datetime.fromisoformat(cached_data["cached_at"]),
-                    ttl_seconds=cached_data["ttl_seconds"]
+                    ttl_seconds=cached_data["ttl_seconds"],
                 )
 
                 logger.debug("Redis cache hit", query_hash=query_hash)
@@ -269,13 +242,7 @@ class RedisCache(QueryCache):
             logger.error("Redis get failed", error=str(e))
             return None
 
-    async def set(
-        self,
-        query_hash: str,
-        results: list[Any],
-        metadata: dict[str, Any],
-        ttl_seconds: int = None
-    ) -> None:
+    async def set(self, query_hash: str, results: list[Any], metadata: dict[str, Any], ttl_seconds: int = None) -> None:
         """Set cache entry in Redis."""
         try:
             redis = await self._get_redis()
@@ -284,31 +251,19 @@ class RedisCache(QueryCache):
             ttl = ttl_seconds or self.default_ttl
 
             # Serialize results
-            serialized_results = [
-                asdict(r) if hasattr(r, '__dataclass_fields__') else r
-                for r in results
-            ]
+            serialized_results = [asdict(r) if hasattr(r, "__dataclass_fields__") else r for r in results]
 
             cached_data = {
                 "query_hash": query_hash,
                 "results": serialized_results,
                 "metadata": metadata,
                 "cached_at": datetime.utcnow().isoformat(),
-                "ttl_seconds": ttl
+                "ttl_seconds": ttl,
             }
 
-            await redis.setex(
-                key,
-                ttl,
-                json.dumps(cached_data)
-            )
+            await redis.setex(key, ttl, json.dumps(cached_data))
 
-            logger.debug(
-                "Redis cache entry set",
-                query_hash=query_hash,
-                num_results=len(results),
-                ttl=ttl
-            )
+            logger.debug("Redis cache entry set", query_hash=query_hash, num_results=len(results), ttl=ttl)
 
         except Exception as e:
             logger.error("Redis set failed", error=str(e))
@@ -361,13 +316,7 @@ class NoOpCache(QueryCache):
         """Always return None (cache miss)."""
         return None
 
-    async def set(
-        self,
-        query_hash: str,
-        results: list[Any],
-        metadata: dict[str, Any],
-        ttl_seconds: int = 3600
-    ) -> None:
+    async def set(self, query_hash: str, results: list[Any], metadata: dict[str, Any], ttl_seconds: int = 3600) -> None:
         """Do nothing."""
 
     async def delete(self, query_hash: str) -> None:

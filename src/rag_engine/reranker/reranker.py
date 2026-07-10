@@ -2,6 +2,7 @@
 RAG Engine - Reranker Module
 Reranks search results for improved relevance using cross-encoder models.
 """
+
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any
@@ -14,6 +15,7 @@ logger = structlog.get_logger(__name__)
 @dataclass
 class RerankResult:
     """Result after reranking"""
+
     id: str
     content: str
     score: float
@@ -25,12 +27,7 @@ class Reranker(ABC):
     """Abstract base class for rerankers."""
 
     @abstractmethod
-    async def rerank(
-        self,
-        query: str,
-        results: list[Any],
-        top_k: int = 10
-    ) -> list[Any]:
+    async def rerank(self, query: str, results: list[Any], top_k: int = 10) -> list[Any]:
         """
         Rerank search results.
 
@@ -53,10 +50,7 @@ class CrossEncoderReranker(Reranker):
     """
 
     def __init__(
-        self,
-        model_name: str = "cross-encoder/ms-marco-MiniLM-L-6-v2",
-        batch_size: int = 32,
-        device: str = "cpu"
+        self, model_name: str = "cross-encoder/ms-marco-MiniLM-L-6-v2", batch_size: int = 32, device: str = "cpu"
     ):
         """
         Initialize cross-encoder reranker.
@@ -71,31 +65,21 @@ class CrossEncoderReranker(Reranker):
         self.device = device
         self.model = None
 
-        logger.info(
-            "CrossEncoderReranker initialized",
-            model=model_name,
-            device=device
-        )
+        logger.info("CrossEncoderReranker initialized", model=model_name, device=device)
 
     def _load_model(self):
         """Lazy load the model."""
         if self.model is None:
             try:
                 from sentence_transformers import CrossEncoder
+
                 self.model = CrossEncoder(self.model_name, device=self.device)
                 logger.info("Cross-encoder model loaded", model=self.model_name)
             except ImportError:
-                logger.warning(
-                    "sentence-transformers not installed, using fallback reranker"
-                )
+                logger.warning("sentence-transformers not installed, using fallback reranker")
                 self.model = "fallback"
 
-    async def rerank(
-        self,
-        query: str,
-        results: list[Any],
-        top_k: int = 10
-    ) -> list[Any]:
+    async def rerank(self, query: str, results: list[Any], top_k: int = 10) -> list[Any]:
         """
         Rerank results using cross-encoder.
 
@@ -133,11 +117,7 @@ class CrossEncoderReranker(Reranker):
             # Sort by new score
             reranked.sort(key=lambda x: x.score, reverse=True)
 
-            logger.info(
-                "Reranked results",
-                original_count=len(results),
-                returned_count=min(top_k, len(reranked))
-            )
+            logger.info("Reranked results", original_count=len(results), returned_count=min(top_k, len(reranked)))
 
             return reranked[:top_k]
 
@@ -153,12 +133,7 @@ class CohereReranker(Reranker):
     Uses Cohere's rerank endpoint for high-quality reranking.
     """
 
-    def __init__(
-        self,
-        api_key: str,
-        model: str = "rerank-english-v2.0",
-        top_n: int = 10
-    ):
+    def __init__(self, api_key: str, model: str = "rerank-english-v2.0", top_n: int = 10):
         """
         Initialize Cohere reranker.
 
@@ -179,18 +154,14 @@ class CohereReranker(Reranker):
         if self.client is None:
             try:
                 import cohere
+
                 self.client = cohere.Client(self.api_key)
                 logger.info("Cohere client initialized")
             except ImportError:
                 logger.warning("cohere package not installed")
                 self.client = "fallback"
 
-    async def rerank(
-        self,
-        query: str,
-        results: list[Any],
-        top_k: int = 10
-    ) -> list[Any]:
+    async def rerank(self, query: str, results: list[Any], top_k: int = 10) -> list[Any]:
         """
         Rerank using Cohere API.
 
@@ -216,10 +187,7 @@ class CohereReranker(Reranker):
 
             # Call Cohere rerank
             response = self.client.rerank(
-                query=query,
-                documents=documents,
-                model=self.model,
-                top_n=min(self.top_n, len(documents))
+                query=query, documents=documents, model=self.model, top_n=min(self.top_n, len(documents))
             )
 
             # Map back to original results
@@ -230,11 +198,7 @@ class CohereReranker(Reranker):
                 result.score = item.relevance_score
                 reranked.append(result)
 
-            logger.info(
-                "Cohere reranked results",
-                original_count=len(results),
-                returned_count=len(reranked)
-            )
+            logger.info("Cohere reranked results", original_count=len(results), returned_count=len(reranked))
 
             return reranked[:top_k]
 
@@ -251,12 +215,7 @@ class LLMReranker(Reranker):
     Slower but can provide reasoning.
     """
 
-    def __init__(
-        self,
-        llm_client,
-        model: str = "gpt-3.5-turbo",
-        batch_size: int = 5
-    ):
+    def __init__(self, llm_client, model: str = "gpt-3.5-turbo", batch_size: int = 5):
         """
         Initialize LLM reranker.
 
@@ -271,12 +230,7 @@ class LLMReranker(Reranker):
 
         logger.info("LLMReranker initialized", model=model)
 
-    async def rerank(
-        self,
-        query: str,
-        results: list[Any],
-        top_k: int = 10
-    ) -> list[Any]:
+    async def rerank(self, query: str, results: list[Any], top_k: int = 10) -> list[Any]:
         """
         Rerank using LLM scoring.
 
@@ -296,13 +250,10 @@ class LLMReranker(Reranker):
 
             # Process in batches
             for i in range(0, len(results), self.batch_size):
-                batch = results[i:i + self.batch_size]
+                batch = results[i : i + self.batch_size]
 
                 # Create prompt
-                docs_text = "\n\n".join([
-                    f"Document {j+1}:\n{r.content[:500]}"
-                    for j, r in enumerate(batch)
-                ])
+                docs_text = "\n\n".join([f"Document {j + 1}:\n{r.content[:500]}" for j, r in enumerate(batch)])
 
                 prompt = f"""Given the query and documents below, rate each document's relevance to the query on a scale of 0-10.
 
@@ -313,14 +264,11 @@ Query: {query}
 Respond with only a JSON array of scores, e.g., [8, 3, 9, 1, 6]"""
 
                 # Get LLM scores
-                response = await self.llm_client.complete(
-                    prompt=prompt,
-                    model=self.model,
-                    temperature=0
-                )
+                response = await self.llm_client.complete(prompt=prompt, model=self.model, temperature=0)
 
                 # Parse scores
                 import json
+
                 try:
                     scores = json.loads(response)
                     for result, score in zip(batch, scores, strict=False):
@@ -334,9 +282,7 @@ Respond with only a JSON array of scores, e.g., [8, 3, 9, 1, 6]"""
             scored_results.sort(key=lambda x: x.score, reverse=True)
 
             logger.info(
-                "LLM reranked results",
-                original_count=len(results),
-                returned_count=min(top_k, len(scored_results))
+                "LLM reranked results", original_count=len(results), returned_count=min(top_k, len(scored_results))
             )
 
             return scored_results[:top_k]
@@ -352,11 +298,6 @@ class NoOpReranker(Reranker):
     Useful for testing or when reranking is disabled.
     """
 
-    async def rerank(
-        self,
-        query: str,
-        results: list[Any],
-        top_k: int = 10
-    ) -> list[Any]:
+    async def rerank(self, query: str, results: list[Any], top_k: int = 10) -> list[Any]:
         """Return results without reranking."""
         return results[:top_k]

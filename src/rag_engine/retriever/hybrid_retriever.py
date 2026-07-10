@@ -2,6 +2,7 @@
 RAG Engine - Retriever with Hybrid Search
 Combines vector search with BM25 for better retrieval
 """
+
 import asyncio
 from dataclasses import dataclass, field
 from typing import Any
@@ -17,6 +18,7 @@ logger = structlog.get_logger(__name__)
 @dataclass
 class RetrievalResult:
     """Result from retrieval with sources"""
+
     id: str
     content: str
     score: float
@@ -46,7 +48,7 @@ class HybridRetriever:
         reranker: Reranker | None = None,
         vector_weight: float = 0.7,
         bm25_weight: float = 0.3,
-        fusion_k: int = 60
+        fusion_k: int = 60,
     ):
         """
         Initialize hybrid retriever.
@@ -66,10 +68,7 @@ class HybridRetriever:
         self.bm25_weight = bm25_weight
         self.fusion_k = fusion_k
 
-
-        logger.info("HybridRetriever initialized",
-                    has_rrf=hasattr(self, "_reciprocal_rank_fusion"),
-                    id=id(self))
+        logger.info("HybridRetriever initialized", has_rrf=hasattr(self, "_reciprocal_rank_fusion"), id=id(self))
         if hasattr(self, "_reciprocal_rank_fusion"):
             logger.info("Method _reciprocal_rank_fusion FOUND")
         else:
@@ -104,12 +103,7 @@ class HybridRetriever:
         Returns:
             List of retrieval results
         """
-        logger.info(
-            "Retrieving documents",
-            tenant_id=tenant_id,
-            kb_ids=kb_ids,
-            query_length=len(query)
-        )
+        logger.info("Retrieving documents", tenant_id=tenant_id, kb_ids=kb_ids, query_length=len(query))
 
         # Get query embedding (reuse the caller's vector when provided)
         if query_embedding is None:
@@ -136,9 +130,7 @@ class HybridRetriever:
             )
             # Fuse results using RRF
             results = self._reciprocal_rank_fusion(
-                vector_results=vector_results,
-                bm25_results=bm25_results,
-                top_k=top_k
+                vector_results=vector_results, bm25_results=bm25_results, top_k=top_k
             )
         else:
             vector_results = await self.vector_store.search(
@@ -151,11 +143,7 @@ class HybridRetriever:
 
         # Rerank if enabled
         if rerank and self.reranker:
-            results = await self.reranker.rerank(
-                query=query,
-                results=results,
-                top_k=top_k
-            )
+            results = await self.reranker.rerank(query=query, results=results, top_k=top_k)
         else:
             results = results[:top_k]
 
@@ -178,7 +166,7 @@ class HybridRetriever:
                         document_id=r.metadata.get("document_id", ""),
                         document_title=r.metadata.get("document_title", ""),
                         chunk_id=r.metadata.get("chunk_id", r.id),
-                        metadata=r.metadata
+                        metadata=r.metadata,
                     )
                 )
 
@@ -208,30 +196,15 @@ class HybridRetriever:
         logger.warning("No embedding client configured — query falls back to keyword search only")
         return [0.0] * 768
 
-    async def _keyword_search(
-        self,
-        query: str,
-        tenant_id: str,
-        kb_ids: list[str],
-        top_k: int
-    ) -> list[SearchResult]:
+    async def _keyword_search(self, query: str, tenant_id: str, kb_ids: list[str], top_k: int) -> list[SearchResult]:
         """Perform keyword search via vector store (Postgres FTS)."""
         if hasattr(self.vector_store, "keyword_search"):
-            return await self.vector_store.keyword_search(
-                tenant_id=tenant_id,
-                kb_ids=kb_ids,
-                query=query,
-                top_k=top_k
-            )
+            return await self.vector_store.keyword_search(tenant_id=tenant_id, kb_ids=kb_ids, query=query, top_k=top_k)
         logger.warning("Vector store does not support keyword search")
         return []
 
     def _reciprocal_rank_fusion(
-        self,
-        vector_results: list[SearchResult],
-        bm25_results: list[SearchResult],
-        top_k: int,
-        k: int = 60
+        self, vector_results: list[SearchResult], bm25_results: list[SearchResult], top_k: int, k: int = 60
     ) -> list[SearchResult]:
         """
         Combine results using Reciprocal Rank Fusion.
@@ -268,11 +241,7 @@ class HybridRetriever:
             scores_map[result.id] += (1 / (k + rank + 1)) * self.bm25_weight
 
         # Sort by fused score
-        sorted_ids = sorted(
-            scores_map.keys(),
-            key=lambda x: scores_map[x],
-            reverse=True
-        )
+        sorted_ids = sorted(scores_map.keys(), key=lambda x: scores_map[x], reverse=True)
 
         # Return top_k results with updated scores
         fused_results = []

@@ -1,6 +1,7 @@
 """
 RAG Engine - Source Code
 """
+
 from .cache import InMemoryCache, NoOpCache, QueryCache, RedisCache
 from .reranker import CohereReranker, CrossEncoderReranker, LLMReranker, NoOpReranker, Reranker
 from .retriever import HybridRetriever, RetrievalResult
@@ -25,5 +26,5 @@ __all__ = [
     "RetrievalResult",
     "SearchResult",
     "SupabaseVectorStore",  # backward-compat alias
-    "VectorDocument"
+    "VectorDocument",
 ]
