@@ -1,6 +1,13 @@
 line-length = 120
 target-version = "py311"
 
+# rag_engine is a VENDORED copy of the standalone rag-engine service
+# (own repo: shielva-mcp-rag-engine), where it is linted, tested, and coverage-
+# gated on its own. Linting/reformatting it here would only churn vendored code
+# and, worse, register it as "new code" against this repo's Clean-as-You-Code
+# quality gate (80% new-coverage) it can never satisfy from here. Exclude it.
+extend-exclude = ["src/rag_engine"]
+
 [lint]
 select = ["E", "W", "F", "I", "B", "C4", "UP", "S", "BLE", "A", "COM", "DTZ", "ISC", "PIE", "PT", "RET", "SIM", "ARG", "PTH", "PL", "RUF"]
 ignore = [
