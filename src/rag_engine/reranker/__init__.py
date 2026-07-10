@@ -1,7 +1,20 @@
 """
 Reranker Module
 """
+from .reranker import (
+    Reranker,
+    RerankResult,
+    CrossEncoderReranker,
+    CohereReranker,
+    LLMReranker,
+    NoOpReranker
+)
 
-from .reranker import CohereReranker, CrossEncoderReranker, LLMReranker, NoOpReranker, Reranker, RerankResult
-
-__all__ = ["CohereReranker", "CrossEncoderReranker", "LLMReranker", "NoOpReranker", "RerankResult", "Reranker"]
+__all__ = [
+    "Reranker",
+    "RerankResult",
+    "CrossEncoderReranker",
+    "CohereReranker",
+    "LLMReranker",
+    "NoOpReranker"
+]
