@@ -1,16 +1,17 @@
 """
 Vector Store Data Models
 """
-from typing import Dict, Any, List, Optional
 from dataclasses import dataclass, field
+from typing import Any
+
 
 @dataclass
 class VectorDocument:
     """Document to be stored in vector DB"""
     id: str
     content: str
-    embedding: List[float]
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    embedding: list[float]
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -19,4 +20,4 @@ class SearchResult:
     id: str
     content: str
     score: float
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)

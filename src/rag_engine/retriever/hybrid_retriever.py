@@ -2,11 +2,11 @@
 RAG Engine - Retriever with Hybrid Search
 Combines vector search with BM25 for better retrieval
 """
-from typing import Dict, Any, List, Optional
-from dataclasses import dataclass, field
 import asyncio
+from dataclasses import dataclass, field
+from typing import Any
+
 import structlog
-import numpy as np
 
 from ..reranker import Reranker
 from ..vectorstore import SearchResult
@@ -25,32 +25,32 @@ class RetrievalResult:
     document_id: str
     document_title: str
     chunk_id: str
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 class HybridRetriever:
     """
     Hybrid retriever combining vector search and BM25.
-    
+
     Features:
     - Vector similarity search (semantic)
     - BM25 keyword search (lexical)
     - Score fusion (RRF)
     - Reranking
     """
-    
+
     def __init__(
         self,
         vector_store: Any,
         embedding_client,
-        reranker: Optional[Reranker] = None,
+        reranker: Reranker | None = None,
         vector_weight: float = 0.7,
         bm25_weight: float = 0.3,
         fusion_k: int = 60
     ):
         """
         Initialize hybrid retriever.
-        
+
         Args:
             vector_store: Qdrant vector store
             embedding_client: Client to generate embeddings
@@ -65,26 +65,26 @@ class HybridRetriever:
         self.vector_weight = vector_weight
         self.bm25_weight = bm25_weight
         self.fusion_k = fusion_k
-        
-        
-        logger.info("HybridRetriever initialized", 
+
+
+        logger.info("HybridRetriever initialized",
                     has_rrf=hasattr(self, "_reciprocal_rank_fusion"),
                     id=id(self))
         if hasattr(self, "_reciprocal_rank_fusion"):
             logger.info("Method _reciprocal_rank_fusion FOUND")
         else:
             logger.error("Method _reciprocal_rank_fusion MISSING")
-    
+
     async def retrieve(
         self,
         query: str,
         tenant_id: str,
-        kb_ids: List[str],
+        kb_ids: list[str],
         top_k: int = 10,
         use_hybrid: bool = True,
         rerank: bool = True,
-        query_embedding: Optional[List[float]] = None,
-    ) -> List[RetrievalResult]:
+        query_embedding: list[float] | None = None,
+    ) -> list[RetrievalResult]:
         """
         Retrieve relevant documents.
 
@@ -148,7 +148,7 @@ class HybridRetriever:
                 top_k=top_k * 2,  # Get more for fusion
             )
             results = vector_results
-        
+
         # Rerank if enabled
         if rerank and self.reranker:
             results = await self.reranker.rerank(
@@ -158,11 +158,11 @@ class HybridRetriever:
             )
         else:
             results = results[:top_k]
-        
+
         # Convert to RetrievalResult and Deduplicate by content
         seen_content = set()
         unique_results = []
-        
+
         for r in results:
             # Normalize content for comparison
             normalized_content = " ".join(r.content.split()).lower()
@@ -181,10 +181,10 @@ class HybridRetriever:
                         metadata=r.metadata
                     )
                 )
-        
+
         return unique_results[:top_k]
-    
-    async def _get_embedding(self, text: str) -> List[float]:
+
+    async def _get_embedding(self, text: str) -> list[float]:
         """Get embedding for a single query string.
 
         The injected EmbeddingClient.embed() takes a LIST and returns a list of
@@ -207,14 +207,14 @@ class HybridRetriever:
         # yields no false matches; the keyword/BM25 leg still runs.
         logger.warning("No embedding client configured — query falls back to keyword search only")
         return [0.0] * 768
-    
+
     async def _keyword_search(
         self,
         query: str,
         tenant_id: str,
-        kb_ids: List[str],
+        kb_ids: list[str],
         top_k: int
-    ) -> List[SearchResult]:
+    ) -> list[SearchResult]:
         """Perform keyword search via vector store (Postgres FTS)."""
         if hasattr(self.vector_store, "keyword_search"):
             return await self.vector_store.keyword_search(
@@ -223,58 +223,57 @@ class HybridRetriever:
                 query=query,
                 top_k=top_k
             )
-        else:
-            logger.warning("Vector store does not support keyword search")
-            return []
+        logger.warning("Vector store does not support keyword search")
+        return []
 
     def _reciprocal_rank_fusion(
         self,
-        vector_results: List[SearchResult],
-        bm25_results: List[SearchResult],
+        vector_results: list[SearchResult],
+        bm25_results: list[SearchResult],
         top_k: int,
         k: int = 60
-    ) -> List[SearchResult]:
+    ) -> list[SearchResult]:
         """
         Combine results using Reciprocal Rank Fusion.
-        
+
         Args:
             vector_results: Results from vector search
             bm25_results: Results from keyword search
             top_k: Number of results to return
             k: RRF constant (default 60)
-            
+
         Returns:
             Fused list of search results
         """
         # Map IDs to results and scores
-        results_map: Dict[str, SearchResult] = {}
-        scores_map: Dict[str, float] = {}
-        
+        results_map: dict[str, SearchResult] = {}
+        scores_map: dict[str, float] = {}
+
         # Process vector results
         for rank, result in enumerate(vector_results):
             if result.id not in results_map:
                 results_map[result.id] = result
                 scores_map[result.id] = 0.0
-            
+
             # Application of vector weight
             scores_map[result.id] += (1 / (k + rank + 1)) * self.vector_weight
-            
+
         # Process BM25 results
         for rank, result in enumerate(bm25_results):
             if result.id not in results_map:
                 results_map[result.id] = result
                 scores_map[result.id] = 0.0
-                
+
             # Application of BM25 weight
             scores_map[result.id] += (1 / (k + rank + 1)) * self.bm25_weight
-            
+
         # Sort by fused score
         sorted_ids = sorted(
             scores_map.keys(),
             key=lambda x: scores_map[x],
             reverse=True
         )
-        
+
         # Return top_k results with updated scores
         fused_results = []
         for doc_id in sorted_ids[:top_k]:
@@ -282,5 +281,5 @@ class HybridRetriever:
             # Update score with fused score
             result.score = scores_map[doc_id]
             fused_results.append(result)
-            
+
         return fused_results
