@@ -230,7 +230,7 @@ class RedisCache(QueryCache):
         if self.redis is None:
             try:
                 import redis.asyncio as redis
-                self.redis = await redis.from_url(self.redis_url, decode_responses=True)
+                self.redis = await redis.from_url(self.redis_url, decode_responses=True, health_check_interval=30, socket_keepalive=True, socket_connect_timeout=5)
                 logger.info("Redis client connected")
             except ImportError:
                 logger.error("redis package not installed")
