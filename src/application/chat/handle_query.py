@@ -2,40 +2,29 @@
 
 What this use case is responsible for
 -------------------------------------
-* Translating the inbound :class:`MCPQueryRequest` into a domain
-  operation.
-* Emitting structured audit at the use-case boundary (so a single
-  log query can recover *all* query traffic regardless of which
-  transport hit it — REST today, future MCP JSON-RPC method
-  tomorrow).
-* Owning the policy → retrieval → LLM-with-tools → response shape
-  contract.
+* Owning the ``policy -> assemble context -> tools -> LLM-with-tools ->
+  response`` orchestration for a bot query.
+* Emitting structured audit at the use-case boundary (so a single log
+  query recovers *all* query traffic regardless of which transport hit
+  it — REST today, an MCP JSON-RPC method tomorrow).
 
-Where the heavy lifting still lives (deliberately, slice 4b)
-------------------------------------------------------------
-``protocol.message_handler.MessageHandler.handle_query`` still
-orchestrates context_assembler + tool prep + LLM loop. We wrap it
-here so the application boundary is clean from the caller's POV
-(REST endpoint → application service → infrastructure orchestration);
-a future slice will decompose the legacy handler into:
+Where the heavy lifting lives
+-----------------------------
+This use case orchestrates three infrastructure components injected by
+the composition root — the context assembler (bot config + system
+prompt + RAG retrieval + prompt-injection fencing), the tool registry
+(per-bot tool set), and the LLM router (provider call + tool loop, with
+per-tenant BYOK resolution inside). Those components are still the
+established singletons; the orchestration that used to live in
+``protocol.MessageHandler.handle_query`` now lives *here*, in the
+application layer, so the DDD boundary is the real request path rather
+than a shim delegating to the legacy handler.
 
-    * ``application/chat.assemble_context``  — pure context building
-    * ``application/tools.execute_tool``     — already exists
-    * ``application/llm.complete``           — already exists
-
-…and HandleQuery will stitch them together explicitly. Until that
-slice lands, this use case is a thin shim with audit + observable
-boundaries. The shim shape is intentional: it gives every caller
-a stable contract while the internals migrate behind the port.
-
-Why a shim is honest (not technical debt to hide)
--------------------------------------------------
-The point of hexagonal architecture isn't "every layer fully
-decomposed on day one" — it's "each layer's contract is stable, and
-internals can refactor without breaking callers". HandleQuery's
-contract is the application-level RAG query operation; whether it
-delegates to the legacy MessageHandler or its own decomposed
-sub-services is an implementation detail invisible to interface/.
+The components consume the protocol-layer ``TenantContext`` /
+``SessionContext`` types; we translate the domain tenant to the legacy
+shape once, at this boundary. Lifting the components themselves to
+domain types (so no translation is needed) is a later slice and does
+not change this use case's contract.
 """
 
 from __future__ import annotations
@@ -81,17 +70,23 @@ class HandleQueryOutput:
 
 
 class HandleQueryUseCase:
-    """Slice 4b shim — wraps the legacy MessageHandler.
+    """Orchestrates the bot-query pipeline over the injected components.
 
-    The constructor takes the legacy handler by reference (not
-    construction). The composition root supplies it because the
-    handler holds composed-over-startup wiring (context_assembler,
-    tool_registry, …) that we don't re-wire in the application
-    layer yet.
+    ``context_assembler`` — assembles bot config + system prompt + RAG
+    chunks (with the prompt-injection fencing) into an LLM message list.
+    ``tool_registry`` — resolves the per-bot enabled tool set.
+    ``llm_router`` — runs the provider call + tool loop, resolving the
+    tenant's BYOK provider/model/key internally.
+
+    The composition root supplies the three components (constructed
+    during the lifespan). This use case owns *ordering + audit*; the
+    components own the work.
     """
 
-    def __init__(self, *, legacy_message_handler: Any) -> None:
-        self._handler = legacy_message_handler
+    def __init__(self, *, context_assembler: Any, tool_registry: Any, llm_router: Any) -> None:
+        self._assembler = context_assembler
+        self._tools = tool_registry
+        self._llm = llm_router
 
     async def execute(
         self,
@@ -108,25 +103,15 @@ class HandleQueryUseCase:
             has_custom_prompt=bool(input_.custom_prompt),
         )
 
-        # Translate to the legacy DTOs the handler still consumes.
-        # Slice 4c will lift this so we use domain types end-to-end.
+        # The components still consume the protocol-layer tenant/session
+        # types — translate the domain tenant once, here at the boundary.
         from src.protocol.models import (
-            MCPQueryRequest as LegacyRequest,
+            SessionContext as LegacySession,
         )
         from src.protocol.models import (
             TenantContext as LegacyTenant,
         )
 
-        legacy_req = LegacyRequest(
-            query=input_.query,
-            bot_id=input_.bot_id,
-            session_id=input_.session_id,
-            stream=input_.stream,
-            context=dict(input_.context or {}),
-            tool_options=dict(input_.tool_options or {}),
-            custom_prompt=input_.custom_prompt,
-            model=input_.model,
-        )
         legacy_tenant = LegacyTenant(
             tenant_id=tenant.tenant_id,
             user_id=tenant.user_id,
@@ -136,9 +121,41 @@ class HandleQueryUseCase:
         )
 
         try:
-            legacy_resp = await self._handler.handle_query(
-                request=legacy_req,
+            # 1. Policy — trust the gateway-verified principal. RBAC lives
+            #    in the IdP/gateway; MCP requires an authenticated,
+            #    tenant-scoped caller and scopes all data by tenant_id.
+            if not tenant.tenant_id:
+                raise PermissionError("Query denied: no authenticated principal")
+
+            # 2. Session — ephemeral per request (not persisted; carries
+            #    conversation shape into the assembler).
+            session = LegacySession(tenant_context=legacy_tenant, bot_id=input_.bot_id)
+
+            # 3. Assemble context: bot config + system prompt + RAG
+            #    retrieval + prompt-injection fencing -> LLM messages.
+            context = await self._assembler.assemble(
+                query=input_.query,
+                session=session,
                 tenant_context=legacy_tenant,
+                bot_id=input_.bot_id,
+                custom_prompt=input_.custom_prompt,
+            )
+
+            # 4. Per-bot enabled tool set.
+            tools = await self._tools.get_tools_for_bot(
+                bot_id=input_.bot_id,
+                tenant_context=legacy_tenant,
+                enabled_tools=dict(input_.tool_options or {}),
+            )
+
+            # 5. LLM + tool loop. Per-tenant BYOK provider/model/key is
+            #    resolved inside the router; ``model`` is a per-bot override.
+            result = await self._llm.execute(
+                messages=context.messages,
+                tools=tools,
+                tenant_context=legacy_tenant,
+                stream=input_.stream,
+                model=input_.model,
             )
         except PermissionError:
             duration_ms = int((time.monotonic() - started) * 1000)
@@ -160,30 +177,49 @@ class HandleQueryUseCase:
             )
             raise
 
+        # 6. Map retrieved chunks -> source dicts (trimmed for wire size;
+        #    source mapping must never break the query response).
+        sources: list[dict[str, Any]] = []
+        for chunk in context.retrieved_chunks:
+            try:
+                meta = getattr(chunk, "metadata", {}) or {}
+                sources.append(
+                    {
+                        "kb_id": getattr(chunk, "kb_id", ""),
+                        "kb_name": getattr(chunk, "kb_name", meta.get("kb_name", "")),
+                        "document_id": getattr(chunk, "document_id", meta.get("document_id", "")),
+                        "document_title": getattr(chunk, "document_title", meta.get("title", "")),
+                        "chunk_id": getattr(chunk, "chunk_id", ""),
+                        "content": (getattr(chunk, "content", "") or "")[:200],
+                        "score": round(getattr(chunk, "score", 0.0), 4),
+                        "metadata": {},
+                    }
+                )
+            except Exception:
+                pass  # never let source mapping break the query response
+
+        tool_calls = [
+            t.model_dump() if hasattr(t, "model_dump") else dict(t) for t in (result.tool_calls or [])
+        ]
         duration_ms = int((time.monotonic() - started) * 1000)
         logger.info(
             "mcp.handle_query_ok",
             tenant_id=tenant.tenant_id,
             bot_id=input_.bot_id,
             duration_ms=duration_ms,
-            model=legacy_resp.model,
-            tokens_used=legacy_resp.tokens_used,
-            source_count=len(legacy_resp.sources),
-            tool_call_count=len(legacy_resp.tool_calls),
+            model=result.model,
+            tokens_used=result.tokens_used,
+            source_count=len(sources),
+            tool_call_count=len(tool_calls),
         )
 
-        # Translate back. We surface the legacy Sources / ToolCalls
-        # as plain dicts (their model_dump shape) so the interface
-        # adapter doesn't depend on protocol/models.
         return HandleQueryOutput(
-            answer=legacy_resp.answer,
-            sources=[s.model_dump() if hasattr(s, "model_dump") else dict(s) for s in (legacy_resp.sources or [])],
-            tool_calls=[
-                t.model_dump() if hasattr(t, "model_dump") else dict(t) for t in (legacy_resp.tool_calls or [])
-            ],
-            tokens_used=int(legacy_resp.tokens_used or 0),
-            latency_ms=int(legacy_resp.latency_ms or 0),
-            model=str(legacy_resp.model or ""),
-            session_id=str(legacy_resp.session_id or ""),
-            query_id=str(legacy_resp.query_id or ""),
+            answer=result.answer or "",
+            sources=sources,
+            tool_calls=tool_calls,
+            tokens_used=int(result.tokens_used or 0),
+            latency_ms=duration_ms,
+            model=str(result.model or ""),
+            session_id=str(session.session_id or ""),
+            query_id="",
         )
