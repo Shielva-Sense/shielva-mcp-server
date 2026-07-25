@@ -117,6 +117,7 @@ async def process_query_stream(
                     context=body.context,
                     tool_options=body.tool_options,
                     custom_prompt=body.custom_prompt,
+                    model=body.model,
                 ),
                 tenant=tenant,
             )
