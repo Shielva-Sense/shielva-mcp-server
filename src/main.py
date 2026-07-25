@@ -304,13 +304,7 @@ async def lifespan(app: FastAPI):
 
     logger.info("MCP Server initialized successfully")
 
-    # Start RAG ingestion scheduler (daily auto-reindex)
-    start_scheduler()
-
     yield
-
-    # Stop scheduler
-    stop_scheduler()
 
     # Discovery Cleanup
     if hasattr(app.state, "discovery"):
@@ -387,18 +381,14 @@ from src.interface.http import (
     connectors_router,
     embeddings_router,
     health_router,
-    ingest_router,
     provision_router,
     query_router,
-    start_scheduler,
-    stop_scheduler,
     tools_router,
 )
 from src.interface.http import llm_router as llm_api_router
 
 app.include_router(health_router)
 app.include_router(codegen_router)
-app.include_router(ingest_router)
 app.include_router(query_router)
 app.include_router(embeddings_router)
 app.include_router(provision_router)

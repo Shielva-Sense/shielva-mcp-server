@@ -21,8 +21,6 @@ from .codegen_router import codegen_router
 from .connectors_router import connectors_router
 from .embeddings_router import embeddings_router
 from .health_router import health_router
-from .ingest_router import router as ingest_router
-from .ingest_router import start_scheduler, stop_scheduler
 from .llm_router import llm_router
 from .provision_router import provision_router
 from .query_router import query_router
@@ -34,11 +32,8 @@ __all__ = [
     "connectors_router",
     "embeddings_router",
     "health_router",
-    "ingest_router",
     "llm_router",
     "provision_router",
     "query_router",
-    "start_scheduler",
-    "stop_scheduler",
     "tools_router",
 ]
