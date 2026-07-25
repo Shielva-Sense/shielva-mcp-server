@@ -103,7 +103,6 @@ COPY --from=builder /opt/venv /opt/venv
 WORKDIR /srv
 COPY --chown=root:root src       /srv/src
 COPY --chown=root:root config    /srv/config
-COPY --chown=root:root schedule_config.json /srv/schedule_config.json
 
 # Healthcheck probe — stdlib-only so a broken httpx won't break health.
 COPY --chown=root:root --chmod=0555 scripts/healthcheck.py /usr/local/bin/healthcheck.py
