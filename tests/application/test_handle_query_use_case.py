@@ -98,7 +98,9 @@ def _tenant(tenant_id: str = "t-1") -> TenantContext:
 
 @pytest.mark.asyncio
 async def test_happy_path_orchestrates_and_maps_sources() -> None:
-    assembler = _FakeAssembler(_Assembled(messages=[{"role": "user", "content": "hi"}], chunks=[_Chunk("some context", 0.912345)]))
+    assembler = _FakeAssembler(
+        _Assembled(messages=[{"role": "user", "content": "hi"}], chunks=[_Chunk("some context", 0.912345)])
+    )
     tools = _FakeTools()
     llm = _FakeLLM(_Result())
     uc = HandleQueryUseCase(context_assembler=assembler, tool_registry=tools, llm_router=llm)

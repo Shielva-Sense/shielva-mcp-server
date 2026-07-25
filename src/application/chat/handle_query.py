@@ -198,9 +198,7 @@ class HandleQueryUseCase:
             except Exception:
                 pass  # never let source mapping break the query response
 
-        tool_calls = [
-            t.model_dump() if hasattr(t, "model_dump") else dict(t) for t in (result.tool_calls or [])
-        ]
+        tool_calls = [t.model_dump() if hasattr(t, "model_dump") else dict(t) for t in (result.tool_calls or [])]
         duration_ms = int((time.monotonic() - started) * 1000)
         logger.info(
             "mcp.handle_query_ok",
