@@ -1,9 +1,17 @@
 # CI gate config consumed by shielva/ci (flow-pipeline CI runner).
 audit:
-  # Non-exploitable transitive advisories with no upstream fix. Accepted by
-  # package name (survives new CVE ids for the same package).
+  # Non-exploitable transitive advisories with no *usable* upstream fix.
+  # Accepted by package name (survives new CVE ids for the same package).
   ignore:
     # ecdsa (transitive via python-jose[cryptography]) — PYSEC-2026-1325, no fix
     # released; the ECDSA signing path is not reachable from this service.
     # Revisit when ecdsa ships a fixed release.
     - ecdsa
+    # setuptools — PYSEC-2026-3447 (fix: 83.0.0). setuptools is a build/install-
+    # time tool, NOT imported by the running service, so the flagged PackageIndex
+    # path-handling issue is not reachable at runtime. Pinning the fixed floor
+    # (setuptools>=83.0.0) was tried and makes the pinned dependency set
+    # unresolvable (pip ResolutionImpossible in the Test step), so there is no
+    # usable upstream fix for this tree today. Revisit when the deps that cap
+    # setuptools<83 are bumped, then drop this line + pin the patched floor.
+    - setuptools
