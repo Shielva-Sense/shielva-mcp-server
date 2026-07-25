@@ -69,6 +69,36 @@ class HandleQueryOutput:
     query_id: str
 
 
+def _chunks_to_sources(chunks: Any) -> list[dict[str, Any]]:
+    """Map retrieval chunks to trimmed source dicts for the wire response.
+
+    Defensive by contract: a malformed chunk must never break the query
+    response, so each chunk is mapped in isolation and any failure is logged
+    and skipped rather than propagated. Kept as a module function (not inlined
+    in ``execute``) so the orchestration stays within the cognitive-complexity
+    budget and the mapping is unit-testable on its own.
+    """
+    sources: list[dict[str, Any]] = []
+    for chunk in chunks or []:
+        try:
+            meta = getattr(chunk, "metadata", {}) or {}
+            sources.append(
+                {
+                    "kb_id": getattr(chunk, "kb_id", ""),
+                    "kb_name": getattr(chunk, "kb_name", meta.get("kb_name", "")),
+                    "document_id": getattr(chunk, "document_id", meta.get("document_id", "")),
+                    "document_title": getattr(chunk, "document_title", meta.get("title", "")),
+                    "chunk_id": getattr(chunk, "chunk_id", ""),
+                    "content": (getattr(chunk, "content", "") or "")[:200],
+                    "score": round(getattr(chunk, "score", 0.0), 4),
+                    "metadata": {},
+                }
+            )
+        except Exception as exc:  # never let source mapping break the query response
+            logger.warning("mcp.source_mapping_skipped", error=str(exc)[:200])
+    return sources
+
+
 class HandleQueryUseCase:
     """Orchestrates the bot-query pipeline over the injected components.
 
@@ -177,26 +207,8 @@ class HandleQueryUseCase:
             )
             raise
 
-        # 6. Map retrieved chunks -> source dicts (trimmed for wire size;
-        #    source mapping must never break the query response).
-        sources: list[dict[str, Any]] = []
-        for chunk in context.retrieved_chunks:
-            try:
-                meta = getattr(chunk, "metadata", {}) or {}
-                sources.append(
-                    {
-                        "kb_id": getattr(chunk, "kb_id", ""),
-                        "kb_name": getattr(chunk, "kb_name", meta.get("kb_name", "")),
-                        "document_id": getattr(chunk, "document_id", meta.get("document_id", "")),
-                        "document_title": getattr(chunk, "document_title", meta.get("title", "")),
-                        "chunk_id": getattr(chunk, "chunk_id", ""),
-                        "content": (getattr(chunk, "content", "") or "")[:200],
-                        "score": round(getattr(chunk, "score", 0.0), 4),
-                        "metadata": {},
-                    }
-                )
-            except Exception:
-                pass  # never let source mapping break the query response
+        # 6. Map retrieved chunks -> source dicts (trimmed for wire size).
+        sources = _chunks_to_sources(context.retrieved_chunks)
 
         tool_calls = [t.model_dump() if hasattr(t, "model_dump") else dict(t) for t in (result.tool_calls or [])]
         duration_ms = int((time.monotonic() - started) * 1000)

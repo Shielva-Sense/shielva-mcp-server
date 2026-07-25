@@ -16,6 +16,7 @@ from typing import Any
 import pytest
 
 from src.application.chat import HandleQueryInput, HandleQueryUseCase
+from src.application.chat.handle_query import _chunks_to_sources
 from src.domain.shared.tenant import TenantContext
 
 
@@ -152,3 +153,40 @@ async def test_source_mapping_never_breaks_response() -> None:
     uc = HandleQueryUseCase(context_assembler=assembler, tool_registry=_FakeTools(), llm_router=_FakeLLM(_Result()))
     out = await uc.execute(input_=HandleQueryInput(query="x", bot_id="b"), tenant=_tenant())
     assert out.answer == "the answer"  # response still produced
+
+
+class _BoomLLM:
+    async def execute(self, *, messages, tools, tenant_context, stream, model):
+        raise ValueError("provider exploded")
+
+
+@pytest.mark.asyncio
+async def test_llm_failure_propagates() -> None:
+    # A non-permission failure from the provider must propagate (and be logged),
+    # not be swallowed — exercises the use case's generic-exception branch.
+    uc = HandleQueryUseCase(
+        context_assembler=_FakeAssembler(_Assembled(messages=[], chunks=[])),
+        tool_registry=_FakeTools(),
+        llm_router=_BoomLLM(),
+    )
+    with pytest.raises(ValueError, match="provider exploded"):
+        await uc.execute(input_=HandleQueryInput(query="x", bot_id="b"), tenant=_tenant())
+
+
+def test_chunks_to_sources_maps_and_trims() -> None:
+    out = _chunks_to_sources([_Chunk("x" * 500, 0.987654)])
+    assert len(out) == 1
+    assert out[0]["content"] == "x" * 200  # trimmed to 200 chars for wire size
+    assert out[0]["score"] == 0.9877  # rounded to 4dp
+
+
+def test_chunks_to_sources_skips_bad_chunk_without_raising() -> None:
+    good = _Chunk("ok", 0.5)
+    bad = _Chunk("bad", 0.5)
+    bad.score = "not-a-number"  # type: ignore[assignment]  # round() raises -> skipped
+    out = _chunks_to_sources([bad, good])
+    assert [s["content"] for s in out] == ["ok"]  # bad dropped, good kept
+
+
+def test_chunks_to_sources_handles_none() -> None:
+    assert _chunks_to_sources(None) == []
