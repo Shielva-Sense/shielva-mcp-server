@@ -31,7 +31,7 @@ def wire_use_cases(
     kb_registry: Any,
     bot_registry: Any,
     policy_engine: Any,
-    message_handler: Any,
+    context_assembler: Any,
     llm_router: Any,
     embedding_client: Any,
     vector_store: Any,
@@ -100,11 +100,15 @@ def wire_use_cases(
     app.state.bot_repository_port = bot_repository_port
     app.state.policy_engine_port = policy_engine_port
 
-    # ── Slice 4b: HandleQuery use case ──────────────────────────
+    # ── HandleQuery use case — owns the query pipeline orchestration ─
+    # (context assembly -> per-bot tools -> LLM+tool loop). No longer a
+    # shim over protocol.MessageHandler; the DDD layer is the real path.
     from src.application.chat import HandleQueryUseCase
 
     app.state.handle_query_use_case = HandleQueryUseCase(
-        legacy_message_handler=message_handler,
+        context_assembler=context_assembler,
+        tool_registry=tool_registry,
+        llm_router=llm_router,
     )
 
     # ── Slice 4c: generic LLM tool-calling loop ─────────────────

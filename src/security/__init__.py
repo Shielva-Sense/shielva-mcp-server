@@ -1,6 +1,6 @@
 """
 Shielva MCP Server Security Layer
-Authorization, policy enforcement, and sandboxed execution.
+Authorization and policy enforcement.
 """
 
 from .policy_engine import (
@@ -9,20 +9,10 @@ from .policy_engine import (
     PolicyDecision,
     normalize_role,
 )
-from .sandbox import (
-    ExecutionResult,
-    ExecutionSandbox,
-    SandboxLimits,
-    SecureToolExecutor,
-)
 
 __all__ = [
-    "ExecutionResult",
-    "ExecutionSandbox",
     "OPAPolicyEngine",
     "PolicyContext",
     "PolicyDecision",
-    "SandboxLimits",
-    "SecureToolExecutor",
     "normalize_role",
 ]

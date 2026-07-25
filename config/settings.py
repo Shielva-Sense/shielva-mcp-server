@@ -222,12 +222,6 @@ class MCPSettings(SealedSettings):
     rate_limit_requests: int = 100
     rate_limit_window_seconds: int = 60
 
-    # ── Security Fix RAG (non-secret) ────────────────────────────────────
-    security_fix_rag_enabled: bool = True
-    security_fix_vector_table: str = "security_fix_entries"
-    security_fix_top_k: int = 5
-    security_fix_min_similarity: float = 0.45
-
 
 def _bridge_legacy_vector_db_env() -> None:
     """Backward-compat alias: accept the legacy ``SUPABASE_DB_URL`` env under

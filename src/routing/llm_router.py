@@ -304,38 +304,27 @@ class LLMRouter:
         api_base: str | None = None,
     ) -> LLMResponse:
         """
-        Execute streaming LLM request.
+        Execute a "streaming" LLM request.
 
-        Yields tokens as they're generated. api_key/api_base, when provided,
-        are the tenant's BYOK credentials (per-tenant routing).
+        The one consumer — ``/mcp/v1/query/stream`` — aggregates the whole
+        answer and emits it as a single SSE event (there is no token-by-token
+        streaming at this layer yet; that arrives with the domain LLM provider's
+        streaming variant). Running LiteLLM in ``stream=True`` mode here bought
+        no token streaming AND silently dropped the tool-calling loop, so a
+        tool-enabled bot returned an empty answer. We therefore run the same
+        tool-capable sync path; the endpoint aggregates identically. True
+        token streaming (with mid-stream tool handling) lives in
+        ``infrastructure.llm.LiteLLMProviderAdapter.stream``.
+
+        api_key/api_base, when provided, are the tenant's BYOK credentials.
         """
-        litellm_tools = self._prepare_tools(tools) if tools else None
-        extra = {"api_base": api_base} if api_base else {}
-
-        response = await acompletion(
-            model=model,
+        return await self._execute_sync(
             messages=messages,
-            tools=litellm_tools,
-            max_tokens=settings.max_tokens,
-            temperature=settings.temperature,
-            api_key=api_key or self._get_api_key(model),
-            stream=True,
-            **extra,
-        )
-
-        full_response = ""
-        async for chunk in response:
-            if chunk.choices[0].delta.content:
-                token = chunk.choices[0].delta.content
-                full_response += token
-
-        # Return final response
-        return LLMResponse(
-            answer=full_response,
-            tool_calls=[],
-            tokens_used=0,  # Not available in streaming
+            tools=tools,
             model=model,
-            finish_reason="stop",
+            tenant_context=tenant_context,
+            api_key=api_key,
+            api_base=api_base,
         )
 
     def _get_api_key(self, model: str) -> str | None:

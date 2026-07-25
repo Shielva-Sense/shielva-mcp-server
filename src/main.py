@@ -267,14 +267,9 @@ async def lifespan(app: FastAPI):
     app.state.discovery_task = asyncio.create_task(app.state.discovery.start())
     logger.info("MCP Server registered with Discovery", gateway=gateway_url, scheme=scheme)
 
-    # Message handler orchestrates everything
-    message_handler = MessageHandler(
-        context_assembler=context_assembler,
-        tool_registry=tool_registry,
-        kb_registry=kb_registry,
-        llm_router=llm_router,
-        policy_engine=policy_engine,
-    )
+    # Provisioning control-plane handler (KB / bot / test-bot). Query
+    # traffic is served by the DDD HandleQueryUseCase, wired below.
+    message_handler = MessageHandler(kb_registry=kb_registry)
 
     # Surface legacy registries on app.state — still consumed by
     # codegen fix-agent + JSON-RPC dispatcher's resources/* fallback
@@ -295,7 +290,7 @@ async def lifespan(app: FastAPI):
         kb_registry=kb_registry,
         bot_registry=bot_registry,
         policy_engine=policy_engine,
-        message_handler=message_handler,
+        context_assembler=context_assembler,
         llm_router=llm_router,
         embedding_client=embedding_client,
         vector_store=vector_store,
@@ -304,13 +299,7 @@ async def lifespan(app: FastAPI):
 
     logger.info("MCP Server initialized successfully")
 
-    # Start RAG ingestion scheduler (daily auto-reindex)
-    start_scheduler()
-
     yield
-
-    # Stop scheduler
-    stop_scheduler()
 
     # Discovery Cleanup
     if hasattr(app.state, "discovery"):
@@ -336,10 +325,8 @@ async def lifespan(app: FastAPI):
 
     # Close policy engine
     try:
-        # We need to access policy_engine from message_handler
-        # message_handler.policy_engine
-        if message_handler and message_handler.policy_engine:
-            await message_handler.policy_engine.close()
+        if policy_engine:
+            await policy_engine.close()
             logger.info("Closed policy engine connection")
     except Exception as e:
         logger.error("Error closing policy engine", error=str(e))
@@ -387,18 +374,14 @@ from src.interface.http import (
     connectors_router,
     embeddings_router,
     health_router,
-    ingest_router,
     provision_router,
     query_router,
-    start_scheduler,
-    stop_scheduler,
     tools_router,
 )
 from src.interface.http import llm_router as llm_api_router
 
 app.include_router(health_router)
 app.include_router(codegen_router)
-app.include_router(ingest_router)
 app.include_router(query_router)
 app.include_router(embeddings_router)
 app.include_router(provision_router)
