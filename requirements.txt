@@ -4,6 +4,13 @@
 # (or BuildKit secret in Docker — see service Dockerfile).
 shielva-common @ git+https://github.com/Shielva-AI/shielva-platform-core@shielva-common-v1.2.1#subdirectory=shielva-common
 
+# Security pins (SOC2 CC7.1 — the CI pip-audit gate). These are transitive
+# build deps we don't import directly, but a resolved version carries a fixed
+# advisory, so we pin the patched floor rather than whitelist it (the
+# .shielva-ci.yml ignore list is only for advisories with NO upstream fix).
+#   setuptools 79.0.1 → PYSEC-2026-3447 (path handling); fixed in 83.0.0.
+setuptools>=83.0.0
+
 # Core
 fastapi>=0.109.0
 uvicorn>=0.27.0
