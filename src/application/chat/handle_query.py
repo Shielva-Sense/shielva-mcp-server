@@ -109,7 +109,7 @@ def _conversation_messages(context: dict[str, Any] | None) -> list[Any]:
             if role not in _MEMORY_ROLES or not content:
                 continue
             out.append(MCPMessage(role=MessageRole(role), content=content))
-        except Exception as exc:  # noqa: BLE001 — one bad turn must not fail the query
+        except Exception as exc:
             logger.warning("conversation_message_skipped", error=str(exc))
     return out
 
