@@ -69,6 +69,51 @@ class HandleQueryOutput:
     query_id: str
 
 
+_MEMORY_ROLES = {"user", "assistant", "system"}
+
+
+def _conversation_messages(context: dict[str, Any] | None) -> list[Any]:
+    """Build prior-turn messages from the caller-supplied conversation memory.
+
+    Wire shape (from core-api, the owner of the transcript)::
+
+        context = {"messages": [{"role": "user"|"assistant", "content": str}, ...],
+                   "summary": "rolling summary of older turns"}
+
+    A ``summary`` is prepended as a single system message so long conversations
+    stay coherent without replaying every turn — the caller has already trimmed
+    ``messages`` to the bot's configured depth.
+
+    Defensive by contract, like ``_chunks_to_sources``: a malformed entry must
+    never break a query, so each is mapped in isolation and bad ones are skipped.
+    ``tool`` roles are dropped — tool plumbing is per-turn noise and replaying it
+    without the matching call ids produces orphaned tool messages at the provider.
+    """
+    if not context:
+        return []
+    from src.protocol.models import MCPMessage, MessageRole
+
+    out: list[Any] = []
+    summary = str(context.get("summary") or "").strip()
+    if summary:
+        out.append(
+            MCPMessage(
+                role=MessageRole.SYSTEM,
+                content=f"Summary of the earlier conversation: {summary}",
+            )
+        )
+    for raw in context.get("messages") or []:
+        try:
+            role = str(raw.get("role") or "").lower()
+            content = str(raw.get("content") or "").strip()
+            if role not in _MEMORY_ROLES or not content:
+                continue
+            out.append(MCPMessage(role=MessageRole(role), content=content))
+        except Exception as exc:  # noqa: BLE001 — one bad turn must not fail the query
+            logger.warning("conversation_message_skipped", error=str(exc))
+    return out
+
+
 def _chunks_to_sources(chunks: Any) -> list[dict[str, Any]]:
     """Map retrieval chunks to trimmed source dicts for the wire response.
 
@@ -157,9 +202,21 @@ class HandleQueryUseCase:
             if not tenant.tenant_id:
                 raise PermissionError("Query denied: no authenticated principal")
 
-            # 2. Session — ephemeral per request (not persisted; carries
-            #    conversation shape into the assembler).
-            session = LegacySession(tenant_context=legacy_tenant, bot_id=input_.bot_id)
+            # 2. Session — still ephemeral per request (MCP persists nothing),
+            #    but now HYDRATED from the caller's conversation memory instead
+            #    of being built empty. The assembler already replays
+            #    `session.messages` into the prompt; until this was populated it
+            #    always replayed nothing, so every turn was a cold start.
+            #
+            #    core-api owns and stores the transcript; MCP stays stateless and
+            #    just receives it. Deliberately NOT a session store here — a second
+            #    persistence layer would drift against core-api's.
+            session = LegacySession(
+                tenant_context=legacy_tenant,
+                bot_id=input_.bot_id,
+                messages=_conversation_messages(input_.context),
+                **({"session_id": input_.session_id} if input_.session_id else {}),
+            )
 
             # 3. Assemble context: bot config + system prompt + RAG
             #    retrieval + prompt-injection fencing -> LLM messages.
