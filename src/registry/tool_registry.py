@@ -357,7 +357,11 @@ DEFAULT_TOOLS = [
                     "default": 5,
                 },
             ],
-            requires_permissions=["rag_access"],
+            # No permission gate: knowledge access is decided by which KBs are
+            # linked to the bot, not by a per-user flag. The previous
+            # ["rag_access"] requirement resolved against an unpopulated legacy
+            # collection, so it silently denied search to EVERY bot.
+            requires_permissions=[],
             enabled_by_default=True,
         ),
         None,  # Handler will be resolved via ToolRegistry methods
