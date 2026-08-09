@@ -367,6 +367,30 @@ class HandleQueryUseCase:
             query_id="",
         )
 
+    async def _batched_answer(
+        self,
+        *,
+        context: Any,
+        tools: Any,
+        legacy_tenant: Any,
+        input_: HandleQueryInput,
+    ) -> str:
+        """Run the ordinary tool-capable LLM call and return its answer text.
+
+        Shared by both non-streaming exits of `execute_stream` — the tool-enabled
+        path and the empty-stream fallback — so the two cannot drift on which
+        arguments they pass, and so `execute_stream` stays inside the cognitive
+        complexity budget.
+        """
+        result = await self._llm.execute(
+            messages=context.messages,
+            tools=tools,
+            tenant_context=legacy_tenant,
+            stream=False,
+            model=input_.model,
+        )
+        return result.answer or ""
+
     async def execute_stream(
         self,
         *,
@@ -410,14 +434,9 @@ class HandleQueryUseCase:
 
         can_stream = self._provider is not None and not tools
         if not can_stream:
-            result = await self._llm.execute(
-                messages=context.messages,
-                tools=tools,
-                tenant_context=legacy_tenant,
-                stream=False,
-                model=input_.model,
+            answer = await self._batched_answer(
+                context=context, tools=tools, legacy_tenant=legacy_tenant, input_=input_
             )
-            answer = result.answer or ""
             logger.info(
                 "mcp.query_stream_batched",
                 bot_id=input_.bot_id,
@@ -448,14 +467,7 @@ class HandleQueryUseCase:
         if not full:
             # An empty stream would be silence on the call. Fall back once.
             logger.warning("mcp.query_stream_empty_fallback", bot_id=input_.bot_id)
-            result = await self._llm.execute(
-                messages=context.messages,
-                tools=tools,
-                tenant_context=legacy_tenant,
-                stream=False,
-                model=input_.model,
-            )
-            full = result.answer or ""
+            full = await self._batched_answer(context=context, tools=tools, legacy_tenant=legacy_tenant, input_=input_)
             if full:
                 yield {"event": "token", "data": {"text": full}}
         yield {"event": "done", "data": {"text": full, "confidence": _confidence_of(context)}}
