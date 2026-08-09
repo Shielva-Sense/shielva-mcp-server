@@ -130,6 +130,7 @@ async def process_query_stream(
                     tool_options=body.tool_options,
                     custom_prompt=body.custom_prompt,
                     model=body.model,
+                    text_only=body.text_only,
                 ),
                 tenant=tenant,
             ):

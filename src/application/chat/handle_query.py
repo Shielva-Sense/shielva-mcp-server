@@ -56,6 +56,7 @@ class HandleQueryInput:
     tool_options: dict[str, bool] = None  # type: ignore[assignment]
     custom_prompt: str | None = None
     model: str | None = None  # per-bot LLM model override
+    text_only: bool = False  # skip tools so the answer can stream
 
 
 @dataclass(frozen=True, slots=True)
@@ -399,6 +400,11 @@ class HandleQueryUseCase:
         # Steps 1-4, shared verbatim with execute().
         context, tools, _session = await self._prepare(input_=input_, tenant=tenant)
         legacy_tenant = _legacy_tenant(tenant)
+        if input_.text_only:
+            # Caller chose speed over actions for this turn. Dropping the tools
+            # here (rather than at resolution) keeps _prepare identical between
+            # the batched and streamed paths — only the LLM call differs.
+            tools = []
 
         yield {"event": "meta", "data": {"confidence": _confidence_of(context)}}
 
