@@ -52,7 +52,7 @@ class _Provider:
     def __init__(self):
         self.called = False
 
-    async def stream(self, _req, *, tenant):  # noqa: ARG002
+    async def stream(self, _req, *, tenant):
         self.called = True
         for tok in ("Strea", "med ", "answer."):
             yield type("C", (), {"delta": tok})()
@@ -105,7 +105,7 @@ async def test_text_only_drops_tools_from_the_batched_fallback_too():
     reintroduce tools the caller asked to skip."""
 
     class _Empty(_Provider):
-        async def stream(self, _req, *, tenant):  # noqa: ARG002
+        async def stream(self, _req, *, tenant):
             self.called = True
             return
             yield  # pragma: no cover
@@ -144,7 +144,7 @@ async def test_a_mid_stream_error_still_terminates_with_done():
     """A consumer mid-utterance needs a terminal event, not a dangling stream."""
 
     class _Boom(_Provider):
-        async def stream(self, _req, *, tenant):  # noqa: ARG002
+        async def stream(self, _req, *, tenant):
             self.called = True
             yield type("C", (), {"delta": "Partial "})()
             raise RuntimeError("provider died")
