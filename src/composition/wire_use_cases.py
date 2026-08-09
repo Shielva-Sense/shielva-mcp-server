@@ -109,6 +109,10 @@ def wire_use_cases(
         context_assembler=context_assembler,
         tool_registry=tool_registry,
         llm_router=llm_router,
+        # Token-streaming provider for /query/stream. Only used for bots with
+        # no tools enabled — the provider's stream is text-only, so tool-enabled
+        # bots keep the batched tool loop (see execute_stream).
+        llm_provider=llm_provider_port,
     )
 
     # ── Slice 4c: generic LLM tool-calling loop ─────────────────

@@ -16,6 +16,7 @@ the wrapper. Tenant-mismatch assertion on resolved KBs blocks the
 
 import hashlib
 import json
+import os
 import re
 from dataclasses import dataclass, field
 from typing import Any
@@ -25,6 +26,20 @@ import structlog
 from src.protocol.models import SessionContext, TenantContext
 
 logger = structlog.get_logger(__name__)
+
+
+def _env_int(name: str, default: int) -> int:
+    """Read a positive int from env, falling back on anything unparseable.
+
+    A typo'd retrieval knob must not take the service down, and must not
+    silently mean "retrieve nothing".
+    """
+    try:
+        value = int(os.getenv(name, "") or default)
+    except (TypeError, ValueError):
+        return default
+    return value if value > 0 else default
+
 
 # Context budget constants
 _MAX_CHUNK_CHARS = 600
@@ -334,7 +349,16 @@ Response Guidelines:
                     "refusing to retrieve (CC6.7 multi-tenant isolation)."
                 )
 
-        top_k = 10  # P2: increased from 5
+        # Retrieved chunks all land in the prompt, so top_k is a direct lever on
+        # time-to-first-token. Measured on a live phone call: 9,956 ms in the LLM
+        # against 217 ms in STT — the caller sat through ~15 s of silence.
+        #
+        # Back to 5 (the value before "P2: increased from 5"): a known-good prior
+        # setting rather than a fresh guess, and the low-score filter below
+        # already drops weak matches, so ranks 6-10 were mostly chunks the
+        # relevance cut would discard anyway. Env-overridable so this can be
+        # tuned per deployment without a rebuild.
+        top_k = _env_int("MCP_RAG_TOP_K", 5)
 
         # P3: KB routing — narrow to most relevant KBs when multiple are configured.
         # FIX #5: embed the query ONCE here and reuse the vector for vector

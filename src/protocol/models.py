@@ -105,6 +105,12 @@ class MCPQueryRequest(BaseModel):
     tool_options: dict[str, bool] = {}  # Enable/disable specific tools
     custom_prompt: str | None = None  # In-memory system prompt override from Studio
     model: str | None = None  # Per-bot LLM model override (bare id; tenant key/provider still apply)
+    # Answer from knowledge only — no tool calls — so /query/stream can emit
+    # real tokens. Opt-in per REQUEST, not per bot: every tool registers with
+    # enabled_by_default=True and no per-bot config is ever written, so a bot's
+    # resolved tool set is never empty and "stream only when tool-less" would
+    # never fire. The caller who wants speed over actions asks for it here.
+    text_only: bool = False
 
 
 class ToolCall(BaseModel):
