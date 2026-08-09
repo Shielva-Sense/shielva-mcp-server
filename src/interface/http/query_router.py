@@ -6,14 +6,16 @@ itself is now ~30 lines of HTTP framing + application call.
 
 Streaming note
 --------------
-The legacy ``/query/stream`` endpoint streams the final answer as a
-single SSE event after the underlying call completes (no token-by-
-token streaming). That behaviour is preserved here — true streaming
-arrives when the LLM provider port grows a streaming variant.
+``/query/stream`` emits real token-by-token SSE (``meta`` -> ``token`` * n ->
+``done``) for bots with NO tools enabled. Bots WITH tools keep the batched tool
+loop and receive the finished answer as a single token event: the provider's
+streaming path is text-only, and streaming through the tool loop previously
+returned empty answers. Correctness over latency for those bots.
 """
 
 from __future__ import annotations
 
+import json
 import os
 
 import structlog
@@ -100,15 +102,25 @@ async def process_query_stream(
     body: MCPQueryRequest,
     tenant=Depends(get_domain_tenant),
 ):
-    """Streaming variant. Today the final answer is emitted as one
-    SSE event — true token streaming comes when the LLM provider
-    port grows a streaming method."""
+    """Token-by-token streaming variant.
+
+    Emits proper SSE events so a consumer can start speaking before the answer
+    is finished: ``meta`` (retrieval confidence, before any token), many
+    ``token`` (text deltas), then ``done`` (full text + confidence).
+
+    Previously this awaited the whole answer and emitted it as one event, which
+    meant a phone call sat in silence for the full generation time — measured at
+    9,956 ms on a live call. Bots WITH tools enabled still take that batched
+    path, because the provider's stream is text-only and streaming through the
+    tool loop returned empty answers; they get one token event with the complete
+    answer, so behaviour is unchanged for them.
+    """
     body.stream = True
     use_case = _use_case(request)
 
     async def generate():
         try:
-            out = await use_case.execute(
+            async for evt in use_case.execute_stream(
                 input_=HandleQueryInput(
                     query=body.query,
                     bot_id=body.bot_id,
@@ -120,9 +132,16 @@ async def process_query_stream(
                     model=body.model,
                 ),
                 tenant=tenant,
-            )
-            yield out.answer
+            ):
+                yield f"event: {evt['event']}\ndata: {json.dumps(evt['data'])}\n\n"
         except Exception as e:
-            yield f"Error: {e}"
+            # Terminate as a well-formed `done` rather than raw text: a consumer
+            # mid-utterance needs a terminal event, not a parse error.
+            logger.warning("mcp.query_stream_error", error=str(e)[:200])
+            yield f"event: done\ndata: {json.dumps({'text': '', 'confidence': 0.0, 'error': str(e)[:200]})}\n\n"
 
-    return StreamingResponse(generate(), media_type="text/event-stream")
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
