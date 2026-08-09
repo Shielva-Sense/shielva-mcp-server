@@ -270,12 +270,18 @@ class HandleQueryUseCase:
         )
 
         # 3. Bot config + system prompt + RAG retrieval + injection fencing.
+        # A spoken answer wants the opposite formatting to a rendered one, and the
+        # tenant guidelines are appended AFTER any custom_prompt — so without this
+        # the HTML rules silently overrode a voice caller's own instruction.
+        # Read off the caller's context envelope; anything else stays "chat".
+        _channel = str((input_.context or {}).get("channel") or "chat").lower()
         context = await self._assembler.assemble(
             query=input_.query,
             session=session,
             tenant_context=legacy_tenant,
             bot_id=input_.bot_id,
             custom_prompt=input_.custom_prompt,
+            channel=_channel,
         )
 
         # 4. Per-bot enabled tool set.
