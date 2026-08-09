@@ -199,6 +199,7 @@ class ContextAssembler:
         tenant_context: TenantContext,
         bot_id: str,
         custom_prompt: str = None,
+        channel: str = "chat",
     ) -> AssembledContext:
         """
         Assemble full context for LLM query.
@@ -209,6 +210,8 @@ class ContextAssembler:
             tenant_context: Tenant isolation context
             bot_id: Bot identifier
             custom_prompt: Optional in-memory system prompt override from Studio
+            channel: "chat" (rendered in a bubble) or "voice" (spoken aloud). The
+                response-format guidelines below are the opposite for each.
 
         Returns:
             AssembledContext ready for LLM
@@ -223,6 +226,7 @@ class ContextAssembler:
             bot_config=bot_config,
             tenant_context=tenant_context,
             custom_prompt=custom_prompt,
+            channel=channel,
         )
 
         # 3. Retrieve knowledge
@@ -254,6 +258,7 @@ class ContextAssembler:
         bot_config: dict[str, Any],
         tenant_context: TenantContext,
         custom_prompt: str = None,
+        channel: str = "chat",
     ) -> str:
         """Build system prompt from bot config and templates."""
         if custom_prompt:
@@ -265,13 +270,21 @@ class ContextAssembler:
 
         current_time_str = datetime.now().strftime("%A, %d %B %Y at %I:%M %p")
 
-        tenant_prompt = f"""
-You are operating for tenant: {tenant_context.tenant_id}
-User role: {tenant_context.role}
-Current Date & Time: {current_time_str}
-
-Response Guidelines:
-1. **Format your entire response as valid HTML.** Do not use markdown (no **bold**, no *italics*, no `code`).
+        # A spoken answer and a rendered one want OPPOSITE things, and these
+        # guidelines are appended AFTER any custom_prompt — so on a phone call the
+        # HTML rules below were overriding the caller's own "two short sentences,
+        # no markup, no preamble" instruction. The bot then read the template's
+        # own example aloud: "I found some information about…", wrapped in <p>.
+        if channel == "voice":
+            format_guidelines = """1. This answer is SPOKEN ALOUD on a phone call. Plain prose only.
+2. **Never emit HTML or markdown.** No tags, no lists, no bullets, no code blocks, no URLs.
+3. Lead with the answer itself. No preamble — never open with "I found some information about".
+4. Keep it to at most two short sentences unless the caller asked for detail.
+5. Write numbers, dates and times the way a person says them.
+6. Only use information from the provided knowledge base.
+7. If you don't know, say so in one sentence and offer to connect a human."""
+        else:
+            format_guidelines = """1. **Format your entire response as valid HTML.** Do not use markdown (no **bold**, no *italics*, no `code`).
 2. **CRITICAL:** Do NOT wrap your response in markdown code blocks (like ```html ... ```). Return raw HTML only.
 3. Use `<ul>` and `<li>` for lists of messages or items.
 4. Use `<strong>` for bold text (e.g., author names or key terms).
@@ -281,7 +294,15 @@ Response Guidelines:
 8. Be conversational and helpful. Start with a direct answer like "<p>Yes, I found some messages from...</p>".
 9. Only use information from the provided knowledge base.
 10. If you don't know something, say so clearly (wrapped in `<p>`).
-11. Cite sources or authors precisely.
+11. Cite sources or authors precisely."""
+
+        tenant_prompt = f"""
+You are operating for tenant: {tenant_context.tenant_id}
+User role: {tenant_context.role}
+Current Date & Time: {current_time_str}
+
+Response Guidelines:
+{format_guidelines}
 
 **Logic & Reasoning:**
 - **Time Check:** Compare any dates mentioned in the knowledge base (e.g., "14th Feb") with the **Current Date & Time ({current_time_str})**.
