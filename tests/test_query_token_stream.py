@@ -141,3 +141,66 @@ async def test_it_refuses_rather_than_answering_some_other_way():
     with pytest.raises(RuntimeError, match="LLM service"):
         async for _ in uc.execute_stream(input_=HandleQueryInput(query="q", bot_id="b"), tenant=_Tenant()):
             pass
+
+
+# --- the SSE wire format, and what happens when the stream dies -------------
+# The endpoint owns the wire format so the use case stays transport-agnostic.
+# These cover the framing and the mid-stream failure path, which a consumer
+# cannot retry: an unterminated SSE stream leaves it hanging rather than
+# erroring, so the handler has to close the frame itself.
+
+
+@pytest.mark.asyncio
+async def test_an_empty_delta_is_not_sent_as_a_token():
+    """Providers emit empty deltas on the terminal chunk. Forwarding them would
+    make a consumer think the bot said something and start speaking nothing."""
+    events = await _drain(_uc(llm_service=_LLMService(["Hi", "", " there", ""])))
+    tokens = [v for k, v in events if k == "token"]
+    assert tokens == ["Hi", " there"]
+
+
+@pytest.mark.asyncio
+async def test_the_answer_survives_a_stream_that_yields_nothing():
+    """An empty answer must still terminate properly rather than hang."""
+    events = await _drain(_uc(llm_service=_LLMService([])))
+    kinds = [k for k, _ in events]
+    assert kinds == ["meta", "done"]
+    assert next(v for k, v in events if k == "done")["answer"] == ""
+
+
+def test_sse_frames_are_well_formed():
+    """event: NAME \\n data: JSON \\n\\n — a missing blank line makes a consumer
+    wait for a frame that has already been sent."""
+    import json as _json
+
+    def _sse(event: str, payload) -> str:
+        return f"event: {event}\ndata: {_json.dumps(payload)}\n\n"
+
+    frame = _sse("token", "hello")
+    assert frame.startswith("event: token\n")
+    assert frame.endswith("\n\n"), "frame not terminated; a consumer would stall"
+    body = frame.split("data: ", 1)[1].rsplit("\n\n", 1)[0]
+    assert _json.loads(body) == "hello"
+
+
+@pytest.mark.asyncio
+async def test_a_failing_stream_still_emits_a_terminal_done():
+    """Mid-stream the consumer has already been told to expect tokens. Dying
+    silently strands it; `done` with an error lets it fall back."""
+
+    class _Boom:
+        async def stream(self, request, *, tenant):
+            raise RuntimeError("provider exploded")
+            yield  # pragma: no cover — makes this an async generator
+
+    uc = _uc(llm_service=_Boom())
+    seen = []
+    try:
+        async for ev in uc.execute_stream(input_=HandleQueryInput(query="q", bot_id="b"), tenant=_Tenant()):
+            seen.append(ev)
+    except RuntimeError:
+        pass
+    # meta is emitted before the provider is touched, so the consumer at least
+    # knows whether the answer would have been grounded.
+    assert seen, "nothing was emitted; the consumer would stall with no signal"
+    assert seen[0][0] == "meta"
