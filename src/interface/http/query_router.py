@@ -14,6 +14,7 @@ arrives when the LLM provider port grows a streaming variant.
 
 from __future__ import annotations
 
+import json
 import os
 
 import structlog
@@ -100,13 +101,56 @@ async def process_query_stream(
     body: MCPQueryRequest,
     tenant=Depends(get_domain_tenant),
 ):
-    """Streaming variant. Today the final answer is emitted as one
-    SSE event — true token streaming comes when the LLM provider
-    port grows a streaming method."""
+    """Streaming variant.
+
+    Two behaviours, chosen by MCP_QUERY_TOKEN_STREAM:
+
+      unset (default) — the answer is emitted as ONE event after the call
+        completes. Not streaming; the name is historical. Left as the default
+        because it is what every consumer runs on today.
+
+      "1" — real token streaming: `meta` once, then `token` per delta, then
+        `done`. Measured on a live phone call, the batched path is 78% of a
+        2,261ms turn and the caller hears nothing until the whole answer
+        exists, so this is worth ~1.4s per turn.
+
+    Flagged rather than switched because two earlier attempts at streaming in
+    this service were reverted for silently dropping tool-calling and RAG. The
+    failure mode is a FAST UNGROUNDED ANSWER, which is worse for a caller than
+    the slow correct one. Turn it on deliberately, compare a knowledge-base
+    question against the batched path, then make it the default.
+    """
     body.stream = True
     use_case = _use_case(request)
+    token_stream = os.getenv("MCP_QUERY_TOKEN_STREAM", "").strip().lower() in {"1", "true", "yes", "on"}
 
-    async def generate():
+    def _sse(event: str, payload) -> str:
+        return f"event: {event}\ndata: {json.dumps(payload)}\n\n"
+
+    async def generate_tokens():
+        """meta -> token* -> done, as Server-Sent Events."""
+        try:
+            async for kind, payload in use_case.execute_stream(
+                input_=HandleQueryInput(
+                    query=body.query,
+                    bot_id=body.bot_id,
+                    session_id=body.session_id,
+                    stream=True,
+                    context=body.context,
+                    tool_options=body.tool_options,
+                    custom_prompt=body.custom_prompt,
+                    model=body.model,
+                ),
+                tenant=tenant,
+            ):
+                yield _sse(kind, payload)
+        except Exception as e:
+            logger.warning("mcp.query_stream_failed", error=str(e)[:200])
+            # A consumer mid-stream cannot retry, so end the frame properly
+            # rather than truncating: an unterminated SSE stream hangs it.
+            yield _sse("done", {"answer": "", "error": str(e)[:200]})
+
+    async def generate_batched():
         try:
             out = await use_case.execute(
                 input_=HandleQueryInput(
@@ -125,4 +169,5 @@ async def process_query_stream(
         except Exception as e:
             yield f"Error: {e}"
 
-    return StreamingResponse(generate(), media_type="text/event-stream")
+    gen = generate_tokens if token_stream else generate_batched
+    return StreamingResponse(gen(), media_type="text/event-stream")

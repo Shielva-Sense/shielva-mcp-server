@@ -109,6 +109,10 @@ def wire_use_cases(
         context_assembler=context_assembler,
         tool_registry=tool_registry,
         llm_router=llm_router,
+        # Only this can emit real tokens; the legacy router aggregates. Passed
+        # so `execute_stream` is available — nothing changes unless
+        # MCP_QUERY_TOKEN_STREAM is turned on.
+        llm_service=app.state.llm_app_service,
     )
 
     # ── Slice 4c: generic LLM tool-calling loop ─────────────────

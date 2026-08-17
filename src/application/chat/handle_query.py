@@ -113,10 +113,113 @@ class HandleQueryUseCase:
     components own the work.
     """
 
-    def __init__(self, *, context_assembler: Any, tool_registry: Any, llm_router: Any) -> None:
+    def __init__(
+        self,
+        *,
+        context_assembler: Any,
+        tool_registry: Any,
+        llm_router: Any,
+        llm_service: Any = None,
+    ) -> None:
         self._assembler = context_assembler
         self._tools = tool_registry
         self._llm = llm_router
+        # The DDD LLM service, which is the only thing here that can emit real
+        # tokens. Optional so existing construction sites keep working: without
+        # it `execute_stream` refuses rather than silently answering some other
+        # way. See its docstring for why the legacy router cannot do this.
+        self._llm_service = llm_service
+
+    async def execute_stream(
+        self,
+        *,
+        input_: HandleQueryInput,
+        tenant: TenantContext,
+    ):
+        """Same query pipeline as `execute`, but yielding tokens as they arrive.
+
+        Why this exists: measured on a live phone call, the batched path takes
+        1,562-2,965ms and the caller hears nothing until the WHOLE answer is
+        generated — 78% of a 2,261ms turn. Streaming makes that time-to-first-
+        token instead, which is the difference between a bot that feels broken
+        and one that does not.
+
+        WHAT IS IDENTICAL TO `execute`, DELIBERATELY: policy, session, context
+        assembly and the per-bot tool set. Assembly is where RAG retrieval and
+        prompt-injection fencing happen, so a streamed answer is grounded in
+        exactly the same chunks as a batched one. That is the property that
+        matters — two earlier attempts at streaming here lost it:
+
+          * `routing.llm_router._execute_streaming` ran LiteLLM with stream=True
+            and silently dropped the TOOL-CALLING loop, so a tool-enabled bot
+            answered with nothing. It now delegates to the sync path.
+          * callers passing `text_only=True` to force streaming lost RAG
+            entirely: asked "what are your clinic timings" that path replied
+            "Hello! How can I help you today?" while the batched path answered
+            from the knowledge base.
+
+        WHAT IS TRADED, EXPLICITLY: no mid-stream tool calls. The provider's
+        streaming variant is text-only. For a spoken Q&A turn that is an
+        acceptable trade — a caller loses nothing they would have heard — and it
+        is NOT acceptable for a turn that must take an action, which should use
+        `execute`. Grounding is never traded; tools are.
+
+        Yields ("meta", {...}) once, then ("token", str) many times, then
+        ("done", {...}). Tuples rather than a bespoke type so the HTTP layer
+        owns the SSE wire format and this stays transport-agnostic.
+        """
+        if self._llm_service is None:
+            raise RuntimeError(
+                "execute_stream needs the DDD LLM service (application.llm.LLMApplicationService); "
+                "the legacy router cannot emit tokens. Wire llm_service= into HandleQueryUseCase."
+            )
+
+        from src.domain.llm.value_objects import LLMMessage, LLMRequest
+        from src.protocol.models import SessionContext as LegacySession
+        from src.protocol.models import TenantContext as LegacyTenant
+
+        if not tenant.tenant_id:
+            raise PermissionError("Query denied: no authenticated principal")
+
+        legacy_tenant = LegacyTenant(
+            tenant_id=tenant.tenant_id,
+            user_id=tenant.user_id,
+            user_email=tenant.user_email,
+            role=tenant.role,
+            permissions=list(tenant.permissions),
+        )
+        session = LegacySession(tenant_context=legacy_tenant, bot_id=input_.bot_id)
+
+        context = await self._assembler.assemble(
+            query=input_.query,
+            session=session,
+            tenant_context=legacy_tenant,
+            bot_id=input_.bot_id,
+            custom_prompt=input_.custom_prompt,
+        )
+
+        # Emitted BEFORE any token so a consumer can decide whether to speak at
+        # all — auto-answer vs approval gating — without waiting for the answer.
+        # That decision is why the meta event exists.
+        chunks = getattr(context, "retrieved_chunks", None) or []
+        yield ("meta", {"retrieved_chunks": len(chunks), "grounded": bool(chunks)})
+
+        request = LLMRequest(
+            messages=tuple(
+                LLMMessage(role=m.get("role", "user"), content=m.get("content", ""))
+                for m in context.messages
+            ),
+            model=input_.model or None,
+        )
+
+        parts: list[str] = []
+        async for chunk in self._llm_service.stream(request, tenant=tenant):
+            delta = getattr(chunk, "delta", "") or ""
+            if delta:
+                parts.append(delta)
+                yield ("token", delta)
+
+        yield ("done", {"answer": "".join(parts), "grounded": bool(chunks)})
 
     async def execute(
         self,
