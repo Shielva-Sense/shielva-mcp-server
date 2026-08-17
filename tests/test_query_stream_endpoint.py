@@ -63,7 +63,12 @@ def _client(use_case, *, token_stream: bool, monkeypatch) -> TestClient:
     app.include_router(query_router)
     app.state.handle_query_use_case = use_case
     app.dependency_overrides[get_domain_tenant] = lambda: _Tenant()
-    app.dependency_overrides[require_llm_entitlement] = lambda: None
+
+    def _no_entitlement_check() -> None:
+        """Entitlement is enforced elsewhere; this test is about the wire."""
+        return None
+
+    app.dependency_overrides[require_llm_entitlement] = _no_entitlement_check
     return TestClient(app)
 
 
