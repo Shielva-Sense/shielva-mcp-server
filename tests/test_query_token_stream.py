@@ -75,10 +75,13 @@ def _uc(assembler=None, llm_service=None):
 
 
 async def _drain(uc):
-    return [ev async for ev in uc.execute_stream(
-        input_=HandleQueryInput(query="what are your timings", bot_id="b"),
-        tenant=_Tenant(),
-    )]
+    return [
+        ev
+        async for ev in uc.execute_stream(
+            input_=HandleQueryInput(query="what are your timings", bot_id="b"),
+            tenant=_Tenant(),
+        )
+    ]
 
 
 @pytest.mark.asyncio
@@ -126,9 +129,7 @@ async def test_it_refuses_without_an_authenticated_principal():
 
     uc = _uc()
     with pytest.raises(PermissionError):
-        async for _ in uc.execute_stream(
-            input_=HandleQueryInput(query="q", bot_id="b"), tenant=_Anon()
-        ):
+        async for _ in uc.execute_stream(input_=HandleQueryInput(query="q", bot_id="b"), tenant=_Anon()):
             pass
 
 
@@ -136,11 +137,7 @@ async def test_it_refuses_without_an_authenticated_principal():
 async def test_it_refuses_rather_than_answering_some_other_way():
     """Without the DDD service there is no token source. Falling back to the
     batched router would look like streaming and silently not be."""
-    uc = HandleQueryUseCase(
-        context_assembler=_Assembler(), tool_registry=_Tools(), llm_router=object()
-    )
+    uc = HandleQueryUseCase(context_assembler=_Assembler(), tool_registry=_Tools(), llm_router=object())
     with pytest.raises(RuntimeError, match="LLM service"):
-        async for _ in uc.execute_stream(
-            input_=HandleQueryInput(query="q", bot_id="b"), tenant=_Tenant()
-        ):
+        async for _ in uc.execute_stream(input_=HandleQueryInput(query="q", bot_id="b"), tenant=_Tenant()):
             pass

@@ -206,8 +206,7 @@ class HandleQueryUseCase:
 
         request = LLMRequest(
             messages=tuple(
-                LLMMessage(role=m.get("role", "user"), content=m.get("content", ""))
-                for m in context.messages
+                LLMMessage(role=m.get("role", "user"), content=m.get("content", "")) for m in context.messages
             ),
             model=input_.model or None,
         )
