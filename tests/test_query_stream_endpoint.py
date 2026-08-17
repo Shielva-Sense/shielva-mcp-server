@@ -62,12 +62,14 @@ def _client(use_case, *, token_stream: bool, monkeypatch) -> TestClient:
     app = FastAPI()
     app.include_router(query_router)
     app.state.handle_query_use_case = use_case
-    app.dependency_overrides[get_domain_tenant] = lambda: _Tenant()
+
+    def _tenant() -> _Tenant:
+        return _Tenant()
 
     def _no_entitlement_check() -> None:
         """Entitlement is enforced elsewhere; this test is about the wire."""
-        return None
 
+    app.dependency_overrides[get_domain_tenant] = _tenant
     app.dependency_overrides[require_llm_entitlement] = _no_entitlement_check
     return TestClient(app)
 
