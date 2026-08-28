@@ -2,7 +2,13 @@
 # correlation) plus shielva_common helpers. Pulled from a GitHub Release
 # of Shielva-AI/shielva-platform-core. Authentication via ~/.netrc
 # (or BuildKit secret in Docker — see service Dockerfile).
-shielva-common @ git+https://github.com/Shielva-AI/shielva-platform-core@shielva-common-v1.2.1#subdirectory=shielva-common
+# Pinned to the COMMIT, not the shielva-common-v1.2.1 TAG. That tag lacks
+# shielva_common.db.redis_client and its envelope bootstrap only understands
+# `vault:v1:` — it silently ignores `vault:kv:` references. Both gaps have
+# already broken a service on its next rebuild (acp-core, auth-manager), and
+# in each case the running pod kept serving because it PREDATED the gap, so
+# nothing surfaced it until a restart. Same ref shielva-identity pins.
+shielva-common @ git+https://github.com/Shielva-AI/shielva-platform-core@65748b8e1e9e8d7f3285c427773de764e150cdaa#subdirectory=shielva-common
 
 # Core
 fastapi>=0.109.0
