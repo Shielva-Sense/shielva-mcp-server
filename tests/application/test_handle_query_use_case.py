@@ -63,8 +63,11 @@ class _FakeAssembler:
         self._a = assembled
         self.calls: list[dict[str, Any]] = []
 
-    async def assemble(self, *, query, session, tenant_context, bot_id, custom_prompt=None):
-        self.calls.append({"query": query, "bot_id": bot_id, "custom_prompt": custom_prompt})
+    async def assemble(self, *, query, session, tenant_context, bot_id, custom_prompt=None, channel="chat"):
+        # `channel` decides whether the response is written to be read in a
+        # bubble or spoken aloud — the guidelines are opposites, so the fake
+        # records it rather than swallowing it.
+        self.calls.append({"query": query, "bot_id": bot_id, "custom_prompt": custom_prompt, "channel": channel})
         return self._a
 
 

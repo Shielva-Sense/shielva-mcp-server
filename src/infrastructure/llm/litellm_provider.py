@@ -47,6 +47,7 @@ from src.domain.llm.value_objects import (
     ModelId,
 )
 from src.domain.shared.tenant import TenantContext
+from src.infrastructure.metering.usage_reporter import report_llm_usage
 from src.routing.tenant_llm_resolver import get_tenant_llm_resolver
 
 logger = structlog.get_logger(__name__)
@@ -93,7 +94,17 @@ class LiteLLMProviderAdapter(LLMProvider):
             _apply_routing(kwargs, candidate, ak, base)
             try:
                 provider_resp = await acompletion(**kwargs)
-                return _from_litellm_response(provider_resp, model_used=candidate)
+                response = _from_litellm_response(provider_resp, model_used=candidate)
+                # Metering is scheduled, never awaited — the customer's answer
+                # does not wait on a billing write, and a failure here cannot
+                # turn a good completion into an error.
+                report_llm_usage(
+                    tenant_id=getattr(tenant, "tenant_id", None),
+                    total_tokens=response.usage.total_tokens,
+                    model_ref=candidate,
+                    request_id=getattr(tenant, "request_id", None),
+                )
+                return response
             except Exception as exc:
                 last_exc = exc
                 logger.warning(

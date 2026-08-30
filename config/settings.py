@@ -135,6 +135,22 @@ class MCPSettings(SealedSettings):
     # default False. PROD: set PLATFORM_INTERNAL_VERIFY_TLS=true.
     tenant_llm_verify_tls: bool = Field(False, validation_alias="PLATFORM_INTERNAL_VERIFY_TLS")
 
+    # ── Usage metering ────────────────────────────────────────────────
+    # Token counts were captured on every completion and then discarded, so
+    # nothing could answer "what did this tenant actually use". Reported
+    # fire-and-forget to the subscription service off the hot path.
+    #
+    # Empty URL or secret DISABLES metering rather than failing a completion:
+    # losing a usage row is a billing gap to reconcile later, whereas raising
+    # here would drop the customer's answer on the floor.
+    usage_ingest_url: str = Field("", validation_alias="USAGE_INGEST_URL")
+    usage_ingest_secret: SecretStr = sealed_field(
+        SecretStr(""),
+        env="USAGE_INGEST_SECRET",
+        file_env="USAGE_INGEST_SECRET_FILE",
+    )
+    usage_ingest_timeout: float = Field(5.0, validation_alias="USAGE_INGEST_TIMEOUT")
+
     # ── Embedding (non-secret) ───────────────────────────────────────────
     embedding_model: str = "models/gemini-embedding-001"
     embedding_dimensions: int = 768
