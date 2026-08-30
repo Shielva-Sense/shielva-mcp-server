@@ -54,6 +54,17 @@ def format_model_for_provider(provider: str, model: str) -> str:
     return spec[0].format(model=model) if spec else model
 
 
+class SelfServiceNoKeyError(RuntimeError):
+    """The tenant is self-service and has no provider key of its own.
+
+    🚨 Distinct from "no config" on purpose. Returning None here would make the
+    caller fall back to Shielva's platform key, which is exactly what
+    self-service must not do — the tenant pays nothing, so its inference cannot
+    run on our credentials. The platform signals this with 402 rather than 204
+    so the two cases can never be confused by an empty response.
+    """
+
+
 @dataclass
 class ResolvedLLM:
     """A tenant's resolved routing target."""
@@ -119,6 +130,11 @@ class TenantLLMResolver:
             )
             return None
 
+        if resp.status_code == 402:
+            # Self-service tenant with no key of its own. Refuse — never fall
+            # back to the platform key.
+            logger.info("tenant_llm_self_service_no_key", tenant_id=tenant_id)
+            raise SelfServiceNoKeyError(tenant_id)
         if resp.status_code == 204:
             return None
         if resp.status_code != 200:
