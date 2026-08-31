@@ -24,25 +24,25 @@ def _quiet_config(monkeypatch: pytest.MonkeyPatch):
 
 def test_unconfigured_is_a_silent_no_op() -> None:
     """An unset ingest URL disables metering rather than failing."""
-    report_llm_usage(tenant_id="t", total_tokens=100)  # must not raise
+    report_llm_usage(tenant_id="t", prompt_tokens=80, completion_tokens=20)  # must not raise
 
 
 def test_missing_tenant_is_skipped() -> None:
-    report_llm_usage(tenant_id=None, total_tokens=100)
+    report_llm_usage(tenant_id=None, prompt_tokens=80, completion_tokens=20)
 
 
 def test_zero_tokens_is_not_reported() -> None:
-    report_llm_usage(tenant_id="t", total_tokens=0)
+    report_llm_usage(tenant_id="t", prompt_tokens=0, completion_tokens=0)
 
 
 def test_negative_tokens_is_not_reported() -> None:
-    report_llm_usage(tenant_id="t", total_tokens=-5)
+    report_llm_usage(tenant_id="t", prompt_tokens=-5, completion_tokens=-5)
 
 
 def test_no_running_loop_does_not_raise(monkeypatch: pytest.MonkeyPatch) -> None:
     """Called from sync context with no loop — degrade, don't explode."""
     monkeypatch.setattr(usage_reporter, "_configured", lambda: True)
-    report_llm_usage(tenant_id="t", total_tokens=10)
+    report_llm_usage(tenant_id="t", prompt_tokens=8, completion_tokens=2)
 
 
 @pytest.mark.asyncio
@@ -54,7 +54,7 @@ async def test_transport_failure_is_swallowed(monkeypatch: pytest.MonkeyPatch) -
         raise ConnectionError("ingest is down")
 
     monkeypatch.setattr(usage_reporter, "_post", _boom)
-    report_llm_usage(tenant_id="t", total_tokens=10)
+    report_llm_usage(tenant_id="t", prompt_tokens=8, completion_tokens=2)
     # Let the scheduled task run; the exception must die inside it.
     await asyncio.sleep(0.05)
 
@@ -70,7 +70,7 @@ async def test_in_flight_task_is_strongly_referenced(monkeypatch: pytest.MonkeyP
         await asyncio.sleep(0.05)
 
     monkeypatch.setattr(usage_reporter, "_post", _slow)
-    report_llm_usage(tenant_id="t", total_tokens=10)
+    report_llm_usage(tenant_id="t", prompt_tokens=8, completion_tokens=2)
     await started.wait()
     assert usage_reporter._IN_FLIGHT, "in-flight report was not retained"
     await asyncio.sleep(0.1)
@@ -86,13 +86,44 @@ async def test_payload_shape_is_what_ingest_expects(monkeypatch: pytest.MonkeyPa
         seen.append(payload)
 
     monkeypatch.setattr(usage_reporter, "_post", _capture)
-    report_llm_usage(tenant_id="acme", total_tokens=1234, model_ref="m", request_id="req-9")
+    report_llm_usage(tenant_id="acme", prompt_tokens=1000, completion_tokens=234, model_ref="m", request_id="req-9")
     await asyncio.sleep(0.05)
 
     assert len(seen) == 1
-    ev = seen[0]["events"][0]
-    assert ev["tenant_id"] == "acme"
-    assert ev["kind"] == "llm"
-    assert ev["quantity"] == 1234
-    # A retried report must be absorbed rather than double-metered.
-    assert ev["dedupe_key"] == "llm:req-9"
+    events = {e["metric"]: e for e in seen[0]["events"]}
+
+    # 🚨 Reported SEPARATELY, never summed — output costs several times input,
+    # so a single total could not be priced.
+    assert events["input_tokens"]["quantity"] == 1000
+    assert events["output_tokens"]["quantity"] == 234
+    assert "cached_input_tokens" not in events, "a zero metric should not be reported"
+
+    for ev in events.values():
+        assert ev["tenant_id"] == "acme"
+        assert ev["kind"] == "llm"
+    # Dedupe is per metric, so a retry is absorbed line by line.
+    assert events["input_tokens"]["dedupe_key"] == "llm:input_tokens:req-9"
+    assert events["output_tokens"]["dedupe_key"] == "llm:output_tokens:req-9"
+
+
+def test_zero_metrics_are_dropped_but_nonzero_siblings_survive(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A prompt with no completion still has input tokens worth billing."""
+    monkeypatch.setattr(usage_reporter, "_configured", lambda: True)
+    sent: list[dict] = []
+    monkeypatch.setattr(usage_reporter, "_schedule", sent.append)
+
+    report_llm_usage(tenant_id="t", prompt_tokens=500, completion_tokens=0, request_id="r")
+    assert len(sent) == 1
+    metrics = {e["metric"] for e in sent[0]["events"]}
+    assert metrics == {"input_tokens"}
+
+
+def test_cached_tokens_are_their_own_line(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Cache hits are far cheaper — folding them into input would overbill."""
+    monkeypatch.setattr(usage_reporter, "_configured", lambda: True)
+    sent: list[dict] = []
+    monkeypatch.setattr(usage_reporter, "_schedule", sent.append)
+
+    report_llm_usage(tenant_id="t", prompt_tokens=100, completion_tokens=50, cached_tokens=900, request_id="r")
+    metrics = {e["metric"]: e["quantity"] for e in sent[0]["events"]}
+    assert metrics == {"input_tokens": 100, "output_tokens": 50, "cached_input_tokens": 900}

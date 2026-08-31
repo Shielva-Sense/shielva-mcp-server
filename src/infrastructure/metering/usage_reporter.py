@@ -64,33 +64,53 @@ async def _post(payload: dict[str, Any]) -> None:
 def report_llm_usage(
     *,
     tenant_id: str | None,
-    total_tokens: int,
+    prompt_tokens: int,
+    completion_tokens: int,
+    cached_tokens: int = 0,
     model_ref: str | None = None,
     provider: str | None = None,
     request_id: str | None = None,
 ) -> None:
     """Schedule a usage report. Returns immediately; never raises.
 
-    A dedupe key is generated per call so an at-least-once delivery cannot
-    double-meter — the ingest side absorbs the repeat.
+    🚨 Input and output are reported as SEPARATE metrics, not summed. Output
+    tokens cost several times input at every provider, so a single total cannot
+    be priced — and once summed, the split cannot be recovered.
+
+    Dedupe keys are per metric so a retried report is absorbed line by line;
+    keyed on the request id, which is what an at-least-once delivery repeats.
     """
-    if not tenant_id or total_tokens <= 0 or not _configured():
+    if not tenant_id or not _configured():
         return
 
-    payload = {
-        "events": [
-            {
-                "tenant_id": tenant_id,
-                "kind": "llm",
-                "quantity": int(total_tokens),
-                "provider": provider,
-                "model_ref": model_ref,
-                "request_id": request_id,
-                "dedupe_key": f"llm:{request_id or uuid.uuid4()}",
-            }
-        ]
-    }
+    ref = request_id or str(uuid.uuid4())
+    counted = (
+        ("input_tokens", int(prompt_tokens or 0)),
+        ("output_tokens", int(completion_tokens or 0)),
+        ("cached_input_tokens", int(cached_tokens or 0)),
+    )
+    events = [
+        {
+            "tenant_id": tenant_id,
+            "kind": "llm",
+            "metric": metric,
+            "quantity": qty,
+            "provider": provider,
+            "model_ref": model_ref,
+            "request_id": request_id,
+            "dedupe_key": f"llm:{metric}:{ref}",
+        }
+        for metric, qty in counted
+        if qty > 0
+    ]
+    if not events:
+        return
 
+    _schedule({"events": events})
+
+
+def _schedule(payload: dict[str, Any]) -> None:
+    """Fire the report onto the loop, or drop it. Never raises."""
     # Check for the loop BEFORE building the coroutine. Creating it first and
     # then failing to schedule leaves an un-awaited coroutine behind.
     try:

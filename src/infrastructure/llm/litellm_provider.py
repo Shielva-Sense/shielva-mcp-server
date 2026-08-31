@@ -100,7 +100,8 @@ class LiteLLMProviderAdapter(LLMProvider):
                 # turn a good completion into an error.
                 report_llm_usage(
                     tenant_id=getattr(tenant, "tenant_id", None),
-                    total_tokens=response.usage.total_tokens,
+                    prompt_tokens=response.usage.prompt_tokens,
+                    completion_tokens=response.usage.completion_tokens,
                     model_ref=candidate,
                     request_id=getattr(tenant, "request_id", None),
                 )
