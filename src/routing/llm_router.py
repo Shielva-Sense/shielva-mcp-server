@@ -9,6 +9,7 @@ Routes LLM requests through LiteLLM with:
 """
 
 import json
+import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -17,6 +18,7 @@ import structlog
 from litellm import acompletion
 
 from config.settings import get_settings
+from src.infrastructure.metering.usage_reporter import report_llm_usage
 from src.protocol.models import Source, TenantContext, ToolCall, ToolCallStatus
 from src.routing.tenant_llm_resolver import (
     format_model_for_provider,
@@ -63,6 +65,37 @@ class ToolSpec:
     description: str
     parameters: dict[str, Any]
     handler: Any  # Async function to call
+
+
+def _request_ref(tenant_context) -> str:
+    """A stable id for one inbound request, so a redelivered report dedupes.
+
+    🚨 The provider adapter read `tenant_context.request_id`, an attribute
+    TenantContext does not have, so the getattr default always won and every
+    report got a fresh UUID — the dedupe index could never match, and the
+    request_id column kept for dispute correlation was always NULL.
+    """
+    for attr in ("request_id", "correlation_id", "trace_id"):
+        value = getattr(tenant_context, attr, None)
+        if value:
+            return str(value)
+    return str(uuid.uuid4())
+
+
+def _cached_tokens(usage) -> int:
+    """Prompt tokens served from the provider's cache, when it reports them.
+
+    Cache hits are several times cheaper at every provider that offers them, so
+    a ledger that cannot see them overstates what the traffic cost.
+    """
+    details = getattr(usage, "prompt_tokens_details", None)
+    for attr in ("cached_tokens", "cache_read_input_tokens"):
+        value = getattr(details, attr, None) if details is not None else None
+        if value is None:
+            value = getattr(usage, attr, None)
+        if value:
+            return int(value)
+    return 0
 
 
 class LLMRouter:
@@ -234,6 +267,27 @@ class LLMRouter:
                 api_key=api_key or self._get_api_key(model),
                 **extra,
             )
+
+            # 🚨 Metered HERE, on every completion in the loop.
+            #
+            # The instrumentation lived only on the domain LLM provider, which
+            # POST /mcp/v1/query does not use — this router is what answers
+            # every phone and chat turn — so tokens were spent, returned, and
+            # logged, and nothing was ever reported. And it is per ITERATION,
+            # not per call: a tool-using bot spends a full completion each time
+            # round, and billing only the last one under-reports every one of
+            # them.
+            usage = getattr(response, "usage", None)
+            if usage is not None:
+                report_llm_usage(
+                    tenant_id=getattr(tenant_context, "tenant_id", None),
+                    prompt_tokens=getattr(usage, "prompt_tokens", 0) or 0,
+                    completion_tokens=getattr(usage, "completion_tokens", 0) or 0,
+                    cached_tokens=_cached_tokens(usage),
+                    model_ref=model,
+                    provider=model.split("/", maxsplit=1)[0] if "/" in model else None,
+                    request_id=f"{_request_ref(tenant_context)}:{iteration}",
+                )
 
             message = response.choices[0].message
             finish_reason = response.choices[0].finish_reason

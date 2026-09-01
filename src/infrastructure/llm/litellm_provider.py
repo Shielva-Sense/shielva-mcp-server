@@ -102,8 +102,15 @@ class LiteLLMProviderAdapter(LLMProvider):
                     tenant_id=getattr(tenant, "tenant_id", None),
                     prompt_tokens=response.usage.prompt_tokens,
                     completion_tokens=response.usage.completion_tokens,
+                    # 🚨 Cache hits are several times cheaper where a provider
+                    # offers them; a ledger that cannot see them overstates
+                    # what the traffic cost.
+                    cached_tokens=_cached_tokens(getattr(provider_resp, "usage", None)),
                     model_ref=candidate,
-                    request_id=getattr(tenant, "request_id", None),
+                    # Without this the provider column — the reason cost can be
+                    # attributed at all — was NULL on every LLM row.
+                    provider=candidate.split("/")[0] if "/" in candidate else None,
+                    request_id=_request_ref(tenant),
                 )
                 return response
             except Exception as exc:
@@ -141,6 +148,10 @@ class LiteLLMProviderAdapter(LLMProvider):
             "max_tokens": request.max_tokens,
             "temperature": request.temperature,
             "stream": True,
+            # 🚨 Ask the provider for usage on the final chunk. Without it a
+            # streamed answer carries no token counts at all, and streaming was
+            # therefore metered as zero — every streamed phone answer was free.
+            "stream_options": {"include_usage": True},
         }
 
         # (model, api_key, api_base) attempts: per-tenant target first, then the
@@ -168,7 +179,20 @@ class LiteLLMProviderAdapter(LLMProvider):
             assert last_exc is not None
             raise last_exc
 
+        # Usage arrives on the final chunk when the provider supports it, and
+        # is accumulated rather than read once: a provider that reports per
+        # chunk would otherwise have only its last chunk billed.
+        prompt_tokens = 0
+        completion_tokens = 0
+        cached_tokens = 0
+
         async for part in resp_stream:
+            usage = getattr(part, "usage", None)
+            if usage is not None:
+                prompt_tokens = max(prompt_tokens, int(getattr(usage, "prompt_tokens", 0) or 0))
+                completion_tokens = max(completion_tokens, int(getattr(usage, "completion_tokens", 0) or 0))
+                cached_tokens = max(cached_tokens, _cached_tokens(usage))
+
             choices = getattr(part, "choices", None) or []
             if not choices:
                 continue
@@ -189,8 +213,53 @@ class LiteLLMProviderAdapter(LLMProvider):
                     model=ModelId(used_model),
                 )
 
+        # Reported once the stream is exhausted, for the same reason the
+        # non-streaming path reports after the completion: the customer's
+        # answer never waits on a billing write.
+        if prompt_tokens or completion_tokens:
+            report_llm_usage(
+                tenant_id=getattr(tenant, "tenant_id", None),
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                cached_tokens=cached_tokens,
+                model_ref=used_model,
+                provider=used_model.split("/")[0] if "/" in used_model else None,
+                request_id=_request_ref(tenant),
+            )
+
 
 # ── helpers ───────────────────────────────────────────────────────
+
+
+def _request_ref(tenant: TenantContext) -> str:
+    """A stable id for one inbound request, so a redelivered report dedupes.
+
+    🚨 This read `tenant.request_id`, an attribute TenantContext does not have
+    — it is a frozen slots dataclass of tenant_id, user_id, user_email, role
+    and permissions — so the getattr default always won, every report got a
+    fresh UUID, and the partial unique index could never absorb a redelivery.
+    """
+    import uuid
+
+    for attr in ("request_id", "correlation_id", "trace_id"):
+        value = getattr(tenant, attr, None)
+        if value:
+            return str(value)
+    return str(uuid.uuid4())
+
+
+def _cached_tokens(usage: Any) -> int:
+    """Prompt tokens the provider served from cache, when it reports them."""
+    if usage is None:
+        return 0
+    details = getattr(usage, "prompt_tokens_details", None)
+    for attr in ("cached_tokens", "cache_read_input_tokens"):
+        value = getattr(details, attr, None) if details is not None else None
+        if value is None:
+            value = getattr(usage, attr, None)
+        if value:
+            return int(value)
+    return 0
 
 
 async def _build_attempts(
