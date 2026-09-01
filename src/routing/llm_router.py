@@ -98,6 +98,14 @@ def _cached_tokens(usage) -> int:
     return 0
 
 
+class AllowanceExhausted(RuntimeError):
+    """The workspace has spent the tokens its plan included.
+
+    A distinct type so the API layer can answer 402 rather than 500 — "you need
+    to pay" and "we broke" are different things to tell a customer.
+    """
+
+
 class LLMRouter:
     """
     Routes LLM requests through LiteLLM.
@@ -181,6 +189,16 @@ class LLMRouter:
                 model = format_model_for_provider(settings.default_llm_provider, model)
 
         model = model or self.default_model
+
+        # 🚨 Refuse only when we KNOW the allowance is spent. The check fails
+        # open on a timeout or a missing config, because a billing lookup must
+        # never be the reason somebody's phone line stops answering.
+        from src.infrastructure.metering.allowance import is_exhausted
+
+        if await is_exhausted(getattr(tenant_context, "tenant_id", None)):
+            raise AllowanceExhausted(
+                "This workspace has used the model tokens included in its plan. Top up in Billing to keep going."
+            )
 
         logger.info(
             "Executing LLM request",
