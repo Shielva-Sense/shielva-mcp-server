@@ -70,6 +70,26 @@ class LiteLLMProviderAdapter(LLMProvider):
         *,
         tenant: TenantContext,
     ) -> LLMResponse:
+        # 🚨 The allowance gate belongs HERE, on the path that actually runs.
+        #
+        # It lived only in llm_router, and this adapter calls `acompletion`
+        # directly — it uses the router for model/key resolution, not to make
+        # the call. Metering was moved here when LLM usage stopped being
+        # recorded; the CEILING was left behind, so a workspace could spend
+        # past both the included tokens and the output cap and only ever be
+        # billed for it after the fact.
+        #
+        # Fails OPEN, exactly as the router's copy does: a billing lookup that
+        # is slow or unconfigured must never be the reason a phone line stops
+        # answering. `is_exhausted` refuses only when it positively knows.
+        from src.infrastructure.metering.allowance import is_exhausted
+        from src.routing.llm_router import AllowanceExhausted
+
+        if await is_exhausted(getattr(tenant, "tenant_id", None)):
+            raise AllowanceExhausted(
+                "This workspace has used the model tokens included in its plan. Top up in Billing to keep going."
+            )
+
         # Lazy litellm import — adapter is loaded at composition
         # time but acompletion is only resolved on first call.
         from litellm import acompletion
@@ -140,6 +160,26 @@ class LiteLLMProviderAdapter(LLMProvider):
         is text-only here — tools are not surfaced (the streaming consumers are
         plain-text explanations / analyses).
         """
+        # 🚨 The allowance gate belongs HERE, on the path that actually runs.
+        #
+        # It lived only in llm_router, and this adapter calls `acompletion`
+        # directly — it uses the router for model/key resolution, not to make
+        # the call. Metering was moved here when LLM usage stopped being
+        # recorded; the CEILING was left behind, so a workspace could spend
+        # past both the included tokens and the output cap and only ever be
+        # billed for it after the fact.
+        #
+        # Fails OPEN, exactly as the router's copy does: a billing lookup that
+        # is slow or unconfigured must never be the reason a phone line stops
+        # answering. `is_exhausted` refuses only when it positively knows.
+        from src.infrastructure.metering.allowance import is_exhausted
+        from src.routing.llm_router import AllowanceExhausted
+
+        if await is_exhausted(getattr(tenant, "tenant_id", None)):
+            raise AllowanceExhausted(
+                "This workspace has used the model tokens included in its plan. Top up in Billing to keep going."
+            )
+
         from litellm import acompletion
 
         messages = _to_litellm_messages(request.messages)
