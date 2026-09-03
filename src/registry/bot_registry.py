@@ -6,6 +6,10 @@ import structlog
 
 logger = structlog.get_logger(__name__)
 
+#: Marks the tenant-owned asset row in ``customerService``. Must match
+#: core-api's ``app.services.workspace_assets.WORKSPACE_SCOPE``.
+WORKSPACE_SCOPE = "workspace"
+
 from config.settings import get_settings
 
 
@@ -29,15 +33,53 @@ class BotRegistry:
         self._cache: dict[tuple[str, str], tuple[float, dict[str, Any]]] = {}
         self._cache_ttl = max(0, getattr(self.settings, "bot_cache_ttl_seconds", 45))
 
-    async def _find_customer(self, tenant_id: str) -> dict[str, Any] | None:
-        """Fetch the customer document for *tenant_id* from the
-        ``customerService`` collection.  Returns ``None`` when no match
-        is found or when the MongoDB client is not initialised.
+    async def _find_customer(self, tenant_id: str, bot_id: str | None = None) -> dict[str, Any] | None:
+        """The document holding this tenant's bot, plus its workspace groups.
+
+        🚨 Was ``find_one({"tenant_id": tenant_id})``. That is ambiguous — a
+        tenant has one ``customerService`` row per member PLUS a workspace row
+        — and core-api has since moved bots, knowledge and groups onto the
+        workspace row, leaving members' rows with ``bots: []``. Mongo returns
+        whichever row it finds first, so this could hand back a member row,
+        ``get_bot`` would not find the bot in it, and every turn would silently
+        fall back to ``_get_mock_bot``: the caller answers with mock config
+        instead of its real prompt and knowledge, and nothing raises.
+
+        Verified in production: for one tenant the member row already holds
+        nbots=0 while the workspace row holds the two real bots. It had not
+        fired yet only because that tenant had taken no calls.
+
+        Resolution order, and why it is not simply "read the workspace row":
+        a tenant whose assets have not been adopted yet still keeps them on a
+        member row, and core-api creates the workspace row EMPTY on first read
+        — so a missing or empty workspace row is not proof the bot is absent.
+        Find the row that actually contains the bot, then take the groups from
+        the workspace row, which is where they now live.
         """
         if not self.mongodb_client:
             return None
-        db = self.mongodb_client[self.settings.mongodb_db_name]
-        return await db.customerService.find_one({"tenant_id": tenant_id})
+        coll = self.mongodb_client[self.settings.mongodb_db_name].customerService
+
+        ws = await coll.find_one({"tenant_id": tenant_id, "scope": WORKSPACE_SCOPE})
+
+        if bot_id is not None and not any(
+            isinstance(b, dict) and b.get("id") == bot_id for b in (ws or {}).get("bots") or []
+        ):
+            legacy = await coll.find_one({"tenant_id": tenant_id, "bots.id": bot_id})
+            if legacy is not None:
+                if ws is None:
+                    return legacy
+                # Bots from the row that has them; groups from the workspace
+                # row, so a half-migrated tenant resolves both correctly.
+                merged = dict(legacy)
+                for field in ("kb_groups", "bot_groups"):
+                    if ws.get(field):
+                        merged[field] = ws[field]
+                return merged
+
+        if ws is not None:
+            return ws
+        return await coll.find_one({"tenant_id": tenant_id})
 
     def invalidate(self, tenant_id: str, bot_id: str) -> None:
         """Drop the cached config for a (tenant, bot). Call from provisioning
@@ -62,7 +104,7 @@ class BotRegistry:
             return self._get_mock_bot(bot_id)
 
         try:
-            customer = await self._find_customer(tenant_id)
+            customer = await self._find_customer(tenant_id, bot_id)
 
             if not customer:
                 logger.warning("Customer not found for tenant", tenant_id=tenant_id)
