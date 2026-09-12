@@ -359,7 +359,15 @@ def _apply_routing(
 def _to_litellm_messages(messages) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for m in messages:
-        d: dict[str, Any] = {"role": m.role.value, "content": m.content or ""}
+        # 🚨 Parts WIN when present: a multimodal turn's payload is the list,
+        # and LiteLLM passes the OpenAI content-parts shape through to whichever
+        # provider is configured. This is what lets the workspace's own
+        # provisioned model read a scanned page — no OCR vendor, no second
+        # pipeline, and the call is metered exactly like any other.
+        d: dict[str, Any] = {
+            "role": m.role.value,
+            "content": list(m.parts) if m.parts else (m.content or ""),
+        }
         if m.tool_calls:
             d["tool_calls"] = [
                 {

@@ -82,7 +82,15 @@ class LLMCompleteMessage(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     role: Literal["system", "user", "assistant", "tool"]
-    content: str = ""
+    #: Text, or OpenAI content parts for a multimodal turn:
+    #: ``[{"type": "text", "text": "..."},
+    #:    {"type": "image_url", "image_url": {"url": "data:image/png;base64,..."}}]``
+    #:
+    #: Both shapes are accepted because both are what callers already send —
+    #: every OpenAI-compatible client writes the list form, and inventing a
+    #: different field name here would mean every caller needs a special case
+    #: for this one service.
+    content: str | list[dict[str, Any]] = ""
     tool_calls: list[_ToolCallDTO] | None = None
     tool_call_id: str | None = None  # required when role=tool
     name: str | None = None  # optional on role=tool
@@ -154,7 +162,8 @@ async def llm_complete(
     domain_messages = tuple(
         LLMMessage(
             role=MessageRole(m.role),
-            content=m.content or "",
+            content="" if isinstance(m.content, list) else (m.content or ""),
+            parts=tuple(m.content) if isinstance(m.content, list) else (),
             tool_calls=tuple(
                 LLMToolCall(
                     id=tc.id,
@@ -245,7 +254,8 @@ async def llm_complete_stream(
     domain_messages = tuple(
         LLMMessage(
             role=MessageRole(m.role),
-            content=m.content or "",
+            content="" if isinstance(m.content, list) else (m.content or ""),
+            parts=tuple(m.content) if isinstance(m.content, list) else (),
             tool_calls=tuple(
                 LLMToolCall(
                     id=tc.id,

@@ -80,6 +80,21 @@ class LLMMessage:
 
     role: MessageRole
     content: str = ""
+    #: Multimodal content parts, in the OpenAI shape —
+    #: ``({"type": "text", ...}, {"type": "image_url", ...})``. Non-empty only
+    #: when the caller is sending something other than plain text.
+    #:
+    #: 🚨 A SEPARATE field rather than widening `content` to `str | list`.
+    #: `content` is read by the tool loop, the token accountant and every
+    #: existing caller as a string; making it sometimes-a-list would put a
+    #: type check in all of them, and the one that was missed would stringify
+    #: a list of dicts into a prompt. Anything that ignores `parts` keeps
+    #: working exactly as it did.
+    #:
+    #: The cost of this shape: a message carrying parts is not hashable (dicts
+    #: are not), and this dataclass is frozen. Nothing hashes an LLMMessage, and
+    #: a text message — every existing one — still hashes fine.
+    parts: tuple[Any, ...] = ()
     tool_calls: tuple[LLMToolCall, ...] = ()
     tool_call_id: str = ""
     name: str = ""  # tool name on role=tool
