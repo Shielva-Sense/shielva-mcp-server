@@ -53,10 +53,19 @@ logger = structlog.get_logger(__name__)
 #: be split back apart unambiguously.
 SEP = "__"
 
-#: Methods that are plumbing, not capability. Exposing `install` or `authorize`
-#: as callable tools would let a model try to re-run an OAuth handshake mid
-#: conversation; `health_check` is noise in a tool list.
-_NOT_TOOLS = frozenset({"install", "authorize", "health_check", "oauth2"})
+#: 🚨 The runtime's `/connectors/types` exposes `capability_actions`, NOT the
+#: `apis` list that sits in the connector's own `connector.json`. This was
+#: written against the file and read `apis`, which is absent from the response —
+#: so every connector produced an empty tool list and the whole catalogue
+#: silently listed nothing. Verified against the live runtime, where the key set
+#: is (auth_type, capabilities, capability_actions, category, description,
+#: display_name, install_fields, name, oauth_scopes, provider, service, type,
+#: version) and `apis` appears nowhere.
+#:
+#: It is also the better source: `capability_actions` is the curated, declared
+#: surface, so the plumbing methods (`install`, `authorize`, `health_check`)
+#: are simply not in it rather than needing to be filtered out.
+ACTIONS_KEY = "capability_actions"
 
 #: The schema catalogue is a deployment fact, not a tenant one. Short enough
 #: that a connector published minutes ago is usable without a restart.
@@ -208,16 +217,18 @@ class ConnectorToolCatalogue(ToolCatalogue, ToolExecutor):
                 # moved on. Listing it would offer a tool nothing can run.
                 logger.info("mcp.installed_connector_not_in_catalogue", connector_type=ctype)
                 continue
-            for api in declared.get("apis") or []:
-                api_id = str(api.get("id") or "")
-                if not api_id or api_id in _NOT_TOOLS:
+            for api in declared.get(ACTIONS_KEY) or []:
+                api_id = str(api.get("action") or "")
+                if not api_id:
                     continue
                 out.append(
                     Tool(
                         name=tool_name_for(ctype, api_id),
                         description=(
-                            str(api.get("description") or api.get("name") or api_id).strip()
-                            + f"  [{declared.get('display_name') or ctype}]"
+                            str(api.get("label") or api.get("description") or api_id).strip()
+                            + f"  [{declared.get('display_name') or ctype}"
+                            + (f" · {api.get('capability')}" if api.get("capability") else "")
+                            + "]"
                         ),
                         input_schema=_schema_for(api),
                         # The connector being installed IS the grant. A second
@@ -237,11 +248,11 @@ class ConnectorToolCatalogue(ToolCatalogue, ToolExecutor):
         declared = (await self._types()).get(ctype)
         if not declared:
             return None
-        for api in declared.get("apis") or []:
-            if str(api.get("id") or "") == api_id and api_id not in _NOT_TOOLS:
+        for api in declared.get(ACTIONS_KEY) or []:
+            if str(api.get("action") or "") == api_id:
                 return Tool(
                     name=name,
-                    description=str(api.get("description") or api_id),
+                    description=str(api.get("label") or api.get("description") or api_id),
                     input_schema=_schema_for(api),
                 )
         return None

@@ -19,24 +19,36 @@ from src.infrastructure.tools.connector_catalogue import (
     tool_name_for,
 )
 
+# 🚨 The shape `/connectors/types` ACTUALLY returns, captured from the live
+# runtime — `capability_actions`, not the `apis` list in the connector's own
+# connector.json. Building these fixtures from the file is what let the first
+# version of this adapter list nothing at all.
 GMAIL = {
     "type": "google_gmail_connector",
     "display_name": "Gmail",
-    "apis": [
+    "version": "1.4.0",
+    "capabilities": ["mail.send"],
+    "capability_actions": [
         {
-            "id": "send_email",
-            "description": "Send an email via the Gmail API.",
+            "capability": "mail.send",
+            "action": "send_email",
+            "label": "Send Email",
+            "method": "POST",
+            "map": {"to": "to", "subject": "subject", "body": "body", "html": "html_body"},
+            "opaque": False,
             "params": [
-                {"key": "to", "type": "text", "required": True, "label": "To"},
-                {"key": "subject", "type": "text", "required": True, "label": "Subject"},
-                {"key": "attachments", "type": "json", "required": False, "help": "List of files"},
+                {"key": "to", "required": True, "type": "string"},
+                {"key": "subject", "required": True, "type": "string"},
+                {"key": "attachments", "required": False, "type": "json", "help": "List of files"},
             ],
-        },
-        {"id": "health_check", "description": "ping"},
-        {"id": "install", "description": "plumbing"},
+        }
     ],
 }
-HUBSPOT = {"type": "hubspot_connector", "display_name": "HubSpot", "apis": [{"id": "create_contact"}]}
+HUBSPOT = {
+    "type": "hubspot_connector",
+    "display_name": "HubSpot",
+    "capability_actions": [{"capability": "crm.create_lead", "action": "create_contact", "label": "Create Contact"}],
+}
 
 
 def _tenant(tid: str = "Tenant-A") -> TenantContext:
@@ -76,7 +88,7 @@ def test_a_name_that_is_not_a_connector_tool_is_rejected_not_guessed():
 
 
 def test_params_become_a_json_schema_an_llm_can_satisfy():
-    schema = _schema_for(GMAIL["apis"][0]).json_schema
+    schema = _schema_for(GMAIL["capability_actions"][0]).json_schema
     assert schema["type"] == "object"
     assert schema["properties"]["to"]["type"] == "string"
     assert schema["properties"]["attachments"]["type"] == "object"
@@ -97,9 +109,9 @@ async def test_only_installed_connectors_are_listed():
 
 
 @pytest.mark.asyncio
-async def test_plumbing_methods_are_not_offered_as_tools():
-    """`install` and `authorize` would let a model re-run an OAuth handshake
-    mid-conversation; `health_check` is noise."""
+async def test_only_declared_capability_actions_become_tools():
+    """The runtime exposes `capability_actions` — the curated surface — so
+    plumbing like `install` and `health_check` is simply never in it."""
     cat = _Cat({"google_gmail_connector"}, {"google_gmail_connector": GMAIL})
     names = [str(t.name) for t in await cat.list_for(_tenant())]
     assert names == ["google_gmail__send_email"]
