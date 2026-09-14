@@ -49,9 +49,42 @@ def wire_use_cases(
     from src.infrastructure.tools import LegacyToolRegistryAdapter
 
     tool_adapter = LegacyToolRegistryAdapter(tool_registry)
+
+    # 🚨 A tenant's installed connectors, as tools, BESIDE the built-ins.
+    #
+    # Built-ins are registered once at startup and are the same for everybody.
+    # Connector tools are neither: this workspace has Gmail installed, the next
+    # has nothing, and the set has to be read per request. That is why they
+    # arrive as a second source rather than as more registrations — a registry
+    # populated at boot has no tenant to scope itself to.
+    #
+    # The legacy adapter is FIRST, so a connector cannot shadow a built-in by
+    # being named after it. Composition degrades one source at a time: if the
+    # connector runtime is unreachable the built-in tools still list.
+    #
+    # Off unless a runtime URL is configured, so a deployment that has no
+    # connector runtime is unchanged rather than logging a failure per request.
+    from config.settings import get_settings
+
+    _settings = get_settings()
+    sources = [(tool_adapter, tool_adapter)]
+    _connector_url = (getattr(_settings, "connector_gateway_url", "") or "").strip()
+    if _connector_url:
+        from src.infrastructure.tools.composite_catalogue import CompositeToolCatalogue
+        from src.infrastructure.tools.connector_catalogue import ConnectorToolCatalogue
+
+        _connectors = ConnectorToolCatalogue(
+            base_url=_connector_url,
+            timeout_s=float(getattr(_settings, "connector_timeout_seconds", 30) or 30),
+        )
+        sources.append((_connectors, _connectors))
+        catalogue: Any = CompositeToolCatalogue(sources)
+    else:
+        catalogue = tool_adapter
+
     app.state.tool_app_service = ToolApplicationService(
-        catalogue=tool_adapter,
-        executor=tool_adapter,
+        catalogue=catalogue,
+        executor=catalogue,
     )
 
     # ── Slice 3: knowledge + LLM ────────────────────────────────
