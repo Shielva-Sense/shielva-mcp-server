@@ -146,6 +146,16 @@ def wire_use_cases(
         # no tools enabled — the provider's stream is text-only, so tool-enabled
         # bots keep the batched tool loop (see execute_stream).
         llm_provider=llm_provider_port,
+        # 🚨 The connector source ONLY — not the composite.
+        #
+        # The composite also carries the built-in tools, and `get_tools_for_bot`
+        # has already returned those. Handing the composite here would offer
+        # every built-in twice, and a duplicated tool name in a prompt is a
+        # model picking between two identical options for no reason.
+        #
+        # None when no connector runtime is configured, which makes this whole
+        # branch inert and leaves every bot exactly as it was.
+        connector_catalogue=(_connectors if _connector_url else None),
     )
 
     # ── Slice 4c: generic LLM tool-calling loop ─────────────────
@@ -155,10 +165,15 @@ def wire_use_cases(
     # decomposition consumes the same loop.
     from src.application.llm import CompleteWithToolLoopUseCase
 
+    # 🚨 The COMPOSITE, so a connector tool the caller put in `input_.tools` can
+    # actually be looked up and run. The loop does not list — tools are passed
+    # in — so this widens what is CALLABLE, never what a model is offered, and
+    # adds no upstream call to the turn. What a bot is offered is decided in
+    # `handle_query`, per bot, opt-in.
     app.state.complete_with_tool_loop_use_case = CompleteWithToolLoopUseCase(
         provider=llm_provider_port,
-        catalogue=tool_adapter,
-        executor=tool_adapter,
+        catalogue=catalogue,
+        executor=catalogue,
     )
 
     logger.info(

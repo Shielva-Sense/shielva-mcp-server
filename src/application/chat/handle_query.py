@@ -218,10 +218,15 @@ class HandleQueryUseCase:
         tool_registry: Any,
         llm_router: Any,
         llm_provider: Any = None,
+        connector_catalogue: Any = None,
     ) -> None:
         self._assembler = context_assembler
         self._tools = tool_registry
         self._llm = llm_router
+        # A tenant's installed connectors, as tools. Optional so existing
+        # construction (and every test) keeps working; when absent, bots get
+        # exactly the tools they got before.
+        self._connectors = connector_catalogue
         # Token-streaming provider. Optional so existing construction keeps
         # working; when absent, execute_stream degrades to the batched path.
         self._provider = llm_provider
@@ -285,11 +290,30 @@ class HandleQueryUseCase:
         )
 
         # 4. Per-bot enabled tool set.
+        overrides = dict(input_.tool_options or {})
         tools = await self._tools.get_tools_for_bot(
             bot_id=input_.bot_id,
             tenant_context=legacy_tenant,
-            enabled_tools=dict(input_.tool_options or {}),
+            enabled_tools=overrides,
         )
+
+        # 🚨 Plus any connector tools switched ON for this bot — opt-in, so a
+        # bot whose configuration says nothing gets exactly what it got before.
+        #
+        # A workspace with seven connectors has ~40 callable methods. Offering
+        # all of them on every turn would put forty schemas in a prompt on the
+        # path where turn latency IS the product, and hand the model forty ways
+        # to do something the bot was never meant to do.
+        if self._connectors is not None:
+            from src.application.chat.connector_tools import specs_for_bot
+
+            tools = list(tools) + await specs_for_bot(
+                catalogue=self._connectors,
+                registry=self._tools,
+                bot_id=input_.bot_id,
+                tenant=tenant,
+                overrides=overrides,
+            )
         return context, tools, session
 
     async def execute(

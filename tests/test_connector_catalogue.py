@@ -235,3 +235,92 @@ async def test_one_broken_source_does_not_empty_the_tool_list():
     ok, broken = _Ok(), _Broken()
     comp = CompositeToolCatalogue([(ok, ok), (broken, broken)])
     assert [str(t.name) for t in await comp.list_for(_tenant())] == ["rag_query"]
+
+
+# ── phase 1b: what a BOT is offered ─────────────────────────────────
+
+
+class _Reg:
+    """The one method `specs_for_bot` consults on the legacy registry."""
+
+    def __init__(self, enabled: dict[str, bool] | None = None):
+        self._enabled = enabled or {}
+
+    def _is_tool_enabled(self, name, bot_id, overrides=None):
+        if overrides and name in overrides:
+            return overrides[name]
+        # Default OFF — exactly what the real one returns for a name it has
+        # never seen, and a connector tool is never registered.
+        return self._enabled.get(name, False)
+
+
+#
+# `ToolSpec` lives in `routing.llm_router`, which imports the host-provided
+# `litellm` — present in the image, absent in a bare checkout (the same gap
+# that stops four pre-existing suite files collecting). Stubbed so these tests
+# exercise this module rather than the local environment.
+
+
+@pytest.mark.asyncio
+async def test_a_bot_is_offered_no_connector_tools_by_default():
+    """🚨 The whole point of opt-in. A workspace with seven connectors has ~40
+    callable methods; offering them all would put forty schemas in every prompt
+    on the path where turn latency is the product."""
+    from src.application.chat.connector_tools import specs_for_bot
+
+    cat = _Cat({"google_gmail_connector"}, {"google_gmail_connector": GMAIL})
+    specs = await specs_for_bot(catalogue=cat, registry=_Reg(), bot_id="b1", tenant=_tenant())
+    assert specs == []
+
+
+@pytest.mark.asyncio
+async def test_a_bot_gets_exactly_the_connector_tool_switched_on_for_it():
+    from src.application.chat.connector_tools import specs_for_bot
+
+    cat = _Cat({"google_gmail_connector"}, {"google_gmail_connector": GMAIL})
+    reg = _Reg({"google_gmail__send_email": True})
+    specs = await specs_for_bot(catalogue=cat, registry=reg, bot_id="b1", tenant=_tenant())
+    assert [s.name for s in specs] == ["google_gmail__send_email"]
+    assert specs[0].parameters["properties"]["to"]["type"] == "string"
+
+
+@pytest.mark.asyncio
+async def test_a_runtime_outage_costs_a_bot_its_connector_tools_not_its_answer():
+    """A degraded answer beats an outage: a bot that cannot reply at all because
+    the connector runtime blinked is much worse than one that replies without
+    its connector tools."""
+    from src.application.chat.connector_tools import specs_for_bot
+
+    class _Broken:
+        async def list_for(self, tenant):
+            raise RuntimeError("runtime is gone")
+
+    specs = await specs_for_bot(catalogue=_Broken(), registry=_Reg({"x": True}), bot_id="b1", tenant=_tenant())
+    assert specs == []
+
+
+@pytest.mark.asyncio
+async def test_the_handler_uses_the_calling_tenant_not_the_listing_one():
+    """🚨 Binding the tenant into the closure would capture whoever happened to
+    be listing when the spec was built."""
+    from src.application.chat.connector_tools import specs_for_bot
+
+    seen = {}
+
+    class _Cat2(_Cat):
+        async def execute(self, *, tool, arguments, tenant, context=None):
+            from src.domain.tools.value_objects import ToolResult
+
+            seen["tenant_id"] = tenant.tenant_id
+            return ToolResult.text("sent")
+
+    cat = _Cat2({"google_gmail_connector"}, {"google_gmail_connector": GMAIL})
+    specs = await specs_for_bot(
+        catalogue=cat,
+        registry=_Reg({"google_gmail__send_email": True}),
+        bot_id="b1",
+        tenant=_tenant("Tenant-LISTING"),
+    )
+    out = await specs[0].handler(_tenant("Tenant-CALLING"), to="a@b.c")
+    assert seen["tenant_id"] == "Tenant-CALLING"
+    assert out == "sent"
