@@ -39,6 +39,7 @@ from .errors import (
     PARSE_ERROR,
     JsonRpcException,
 )
+from .protected_resource import www_authenticate_value
 from .types import JsonRpcError, JsonRpcRequest, JsonRpcResponse
 
 logger = structlog.get_logger(__name__)
@@ -80,7 +81,15 @@ def _tenant_from_request(request: Request) -> TenantContext:
     GA-readiness backlog."""
     tenant_id = (request.headers.get("X-Tenant-ID") or "").strip()
     if not tenant_id:
-        raise HTTPException(status_code=401, detail="Missing X-Tenant-ID header")
+        # RFC 9728 §5.1: the 401 is what makes a client discover the
+        # authorization server. Without this header the client learns only
+        # that it was refused, not that signing in is an option — and falls
+        # back to asking the user to paste an API key.
+        raise HTTPException(
+            status_code=401,
+            detail="Missing X-Tenant-ID header",
+            headers={"WWW-Authenticate": www_authenticate_value()},
+        )
     return TenantContext(
         tenant_id=tenant_id,
         user_id=request.headers.get("X-User-ID") or "mcp-client",

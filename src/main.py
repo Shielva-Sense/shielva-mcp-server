@@ -401,6 +401,15 @@ from src.composition import build_mcp_jsonrpc_router
 
 app.include_router(build_mcp_jsonrpc_router())
 
+# RFC 9728 protected-resource metadata, served at the service ROOT so the
+# gateway's /api/mcp strip lands it on the public
+# <gateway>/api/mcp/.well-known/oauth-protected-resource. This is what tells
+# an MCP client that shielva-identity is the authorization server — without
+# it the client can only ask the user to paste an API key.
+from src.interface.mcp_jsonrpc import build_protected_resource_router
+
+app.include_router(build_protected_resource_router())
+
 # CORS middleware
 app.add_middleware(
     CORSMiddleware,

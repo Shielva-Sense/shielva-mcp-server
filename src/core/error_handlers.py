@@ -17,11 +17,12 @@ def _err(
     msg: str,
     detail: str | None = None,
     retryable: bool = False,
+    headers: dict[str, str] | None = None,
 ) -> JSONResponse:
     body: dict = {"error": {"code": code, "message": msg, "retryable": retryable}}
     if detail:
         body["error"]["detail"] = detail
-    return JSONResponse(status_code=status, content=body)
+    return JSONResponse(status_code=status, content=body, headers=headers)
 
 
 def install_exception_handlers(app: FastAPI) -> None:
@@ -42,7 +43,18 @@ def install_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(StarletteHTTPException)
     async def _http(req, exc: StarletteHTTPException) -> JSONResponse:  # type: ignore[type-arg]
         logger.info("http_exception", status_code=exc.status_code, path=req.url.path)
-        return _err(exc.status_code, "HTTP_ERROR", str(exc.detail))
+        # 🚨 ``exc.headers`` must survive. Installing this handler replaces
+        # Starlette's, which DOES forward them — so every header a raiser
+        # attaches (``WWW-Authenticate`` on a 401, ``Retry-After`` on a 429)
+        # was being dropped here. For a 401 that is the whole difference
+        # between a client that discovers the authorization server and one
+        # that only knows it was refused.
+        return _err(
+            exc.status_code,
+            "HTTP_ERROR",
+            str(exc.detail),
+            headers=getattr(exc, "headers", None),
+        )
 
     @app.exception_handler(RequestValidationError)
     async def _validation(req, exc: RequestValidationError) -> JSONResponse:  # type: ignore[type-arg]

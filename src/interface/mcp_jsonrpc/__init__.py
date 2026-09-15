@@ -11,6 +11,7 @@ Spec methods implemented:
     prompts/get, logging/setLevel, notifications/cancelled.
 """
 
+from .protected_resource import build_router as build_protected_resource_router
 from .transport import build_router
 
-__all__ = ["build_router"]
+__all__ = ["build_protected_resource_router", "build_router"]

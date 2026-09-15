@@ -238,6 +238,41 @@ class MCPSettings(SealedSettings):
     rate_limit_requests: int = 100
     rate_limit_window_seconds: int = 60
 
+    # ── OAuth 2.0 protected-resource metadata, RFC 9728 (non-secret) ─────
+    # An MCP client (Claude Desktop) decides between offering "Sign in" and
+    # asking the user to paste an API key by probing this server for
+    # protected-resource metadata. With no document naming an authorization
+    # server there is nothing to sign in to, so the pasted key is the only
+    # option the client can offer.
+    #
+    # shielva-identity ALREADY is the authorization server (OAuth 2.0 / OIDC,
+    # PKCE S256 mandatory, JWKS published). Nothing here implements OAuth —
+    # these values only advertise the server that exists.
+    #
+    # Both URLs are the PUBLIC (through-the-gateway) ones and differ per
+    # environment, so they are env-driven and never literals in code. The
+    # defaults are the local dev gateway, matching shielva-identity's own
+    # BACKEND_URL default of https://localhost:8000.
+    #
+    #   prod: MCP_OAUTH_RESOURCE_URL=https://<gateway-host>/api/mcp
+    #         MCP_OAUTH_AUTHORIZATION_SERVER=https://<gateway-host>/identity
+    mcp_oauth_resource_url: str = Field(
+        "https://localhost:8000/api/mcp",
+        validation_alias="MCP_OAUTH_RESOURCE_URL",
+    )
+    mcp_oauth_authorization_server: str = Field(
+        "https://localhost:8000/identity",
+        validation_alias="MCP_OAUTH_AUTHORIZATION_SERVER",
+    )
+    # Comma-separated rather than list[str]: pydantic-settings parses a list
+    # field from env as JSON, which is hostile to write in a k8s env block.
+    # Default mirrors what shielva-identity's discovery document advertises
+    # (scopes_supported in app/api/v1/endpoints/jwks.py).
+    mcp_oauth_scopes: str = Field(
+        "openid,profile,email",
+        validation_alias="MCP_OAUTH_SCOPES",
+    )
+
 
 def _bridge_legacy_vector_db_env() -> None:
     """Backward-compat alias: accept the legacy ``SUPABASE_DB_URL`` env under
