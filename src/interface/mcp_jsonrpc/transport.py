@@ -201,6 +201,18 @@ def build_router(dispatcher: MCPDispatcher) -> APIRouter:
     router = APIRouter(tags=["mcp-protocol"])
     allowed = _allowed_origins()
 
+    # 🚨 Every handler is registered at BOTH "/mcp" and "/".
+    #
+    # The gateway routes /api/mcp/* here and strips /api/mcp, so the protocol
+    # endpoint a client has to paste into its config reads /api/mcp/mcp — the
+    # word twice, once from the gateway's route and once from ours. Serving the
+    # same handler at the router root makes /api/mcp/ the clean URL while
+    # /mcp keeps working for anything already pointed at it in-cluster.
+    #
+    # Nothing else answers at "/" (the service's other routers all carry their
+    # own prefixes), so this collides with nothing.
+    _PROTOCOL_PATHS = ("/mcp", "/")
+
     def _check_origin(request: Request) -> None:
         origin = request.headers.get("origin")
         if not _origin_ok(origin, allowed):
@@ -211,7 +223,8 @@ def build_router(dispatcher: MCPDispatcher) -> APIRouter:
 
     # ── POST /mcp ─────────────────────────────────────────────────
 
-    @router.post("/mcp")
+    @router.post(_PROTOCOL_PATHS[0], include_in_schema=True)
+    @router.post(_PROTOCOL_PATHS[1], include_in_schema=False)
     async def mcp_post(request: Request) -> Response:
         _check_origin(request)
         tenant = _tenant_from_request(request)
@@ -346,7 +359,8 @@ def build_router(dispatcher: MCPDispatcher) -> APIRouter:
 
     # ── DELETE /mcp ───────────────────────────────────────────────
 
-    @router.delete("/mcp")
+    @router.delete(_PROTOCOL_PATHS[0], include_in_schema=True)
+    @router.delete(_PROTOCOL_PATHS[1], include_in_schema=False)
     async def mcp_delete(request: Request) -> Response:
         _check_origin(request)
         tenant = _tenant_from_request(request)
@@ -371,7 +385,8 @@ def build_router(dispatcher: MCPDispatcher) -> APIRouter:
     # adds progress notifications during tool calls, this endpoint
     # will stream them.
 
-    @router.get("/mcp")
+    @router.get(_PROTOCOL_PATHS[0], include_in_schema=True)
+    @router.get(_PROTOCOL_PATHS[1], include_in_schema=False)
     async def mcp_get(request: Request) -> Response:
         _check_origin(request)
         _ = _tenant_from_request(request)
