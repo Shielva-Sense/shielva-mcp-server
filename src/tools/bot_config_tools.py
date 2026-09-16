@@ -26,6 +26,7 @@ reachable from a customer's MCP key at all.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 import structlog
@@ -39,6 +40,32 @@ from src.tools._gateway import fail as _fail
 logger = structlog.get_logger(__name__)
 
 _CMS = "/cms/api/v1"
+
+
+def _slug(text: str, limit: int = 64) -> str:
+    """A stable identifier from a human name: lower-case, [a-z0-9_] only."""
+    out = re.sub(r"[^a-z0-9]+", "_", (text or "").strip().lower()).strip("_")
+    return out[:limit] or "item"
+
+
+#: Keys a GET returns that a create/replace model does not accept back.
+_SERVER_KEYS = ("_id", "id", "created_at", "updated_at", "tenant_id")
+
+
+async def _merge_put(tenant_context: TenantContext, path: str, changes: dict[str, Any]) -> Any:
+    """Apply a PARTIAL change to a resource whose PUT replaces the whole record.
+
+    🚨 The CMS PUT endpoints validate against the full *Create model — intent_id
+    and label, or name/rule_type/pattern/intent_id, are REQUIRED on every PUT.
+    Sending only the changed keys (what these tools did) 422'd every update. So:
+    read the record, overlay the changes, write the whole thing back.
+    """
+    current = await _call("GET", path, tenant_context)
+    if not isinstance(current, dict) or not current:
+        raise ToolCallError(f"GET {path} returned no record to update")
+    merged = {k: v for k, v in current.items() if k not in _SERVER_KEYS}
+    merged.update(changes)
+    return await _call("PUT", path, tenant_context, params=_LIVE, json=merged)
 
 
 def _items(data: Any, key: str = "items") -> list[dict[str, Any]]:
@@ -73,26 +100,61 @@ async def shielva_create_identity(
     persona: str = "",
     tone: str = "",
     greeting: str = "",
+    role: str | None = None,
+    personality_traits: list[str] | None = None,
+    boundaries: list[str] | None = None,
+    fallback_message: str | None = None,
+    is_active: bool = False,
 ) -> dict[str, Any]:
-    """Create a bot persona: its name, how it speaks, how it opens a conversation."""
+    """Create a bot persona: its name, role, how it speaks, how it opens.
+
+    🚨 acp-core IdentityCreate REQUIRES ``role`` and has NO ``persona`` field.
+    This tool sent ``persona`` and never ``role``, so every call 422'd with
+    "role: Field required" — no persona could be created over MCP at all.
+
+    ``role`` is the short primary role ("Lettings assistant"). When omitted, the
+    first clause of ``persona`` is used. Long-form behaviour belongs in the
+    bot's system prompt (shielva_set_bot_prompt); the identity holds name, role,
+    tone, traits, boundaries and the greeting.
+    """
     if not name or not bot_id:
         return _fail("name and bot_id are required")
-    body = {"name": name, "bot_id": bot_id, "persona": persona, "tone": tone, "greeting": greeting}
+    derived = re.split(r"[.;:\n]", (persona or "").strip(), maxsplit=1)[0].strip()[:120]
+    body: dict[str, Any] = {
+        "name": name,
+        "bot_id": bot_id,
+        "role": (role or derived or "Assistant").strip(),
+        "tone": tone or "professional",
+        "greeting": greeting or None,
+        "personality_traits": list(personality_traits or []),
+        "boundaries": list(boundaries or []),
+        "fallback_message": fallback_message,
+        "is_active": bool(is_active),
+    }
     try:
         data = await _call("POST", f"{_CMS}/identity", tenant_context, params=_LIVE, json=body)
     except ToolCallError as exc:
         return _fail(str(exc), bot_id=bot_id)
-    return {"status": "created", "identity": data}
+    ident = data if isinstance(data, dict) else {}
+    return {"status": "created", "identity_id": ident.get("_id") or ident.get("id"), "identity": data}
 
 
 async def shielva_update_identity(
     tenant_context: TenantContext, identity_id: str, changes: dict[str, Any]
 ) -> dict[str, Any]:
-    """Change fields on an existing persona. Only the keys you pass are touched."""
+    """Change fields on an existing persona. Only the keys you pass are touched.
+
+    Uses PATCH (IdentityPatch — every field optional). The PUT this used to call
+    is a full replace that requires name AND role, so any partial change 422'd.
+    """
     if not identity_id or not isinstance(changes, dict) or not changes:
         return _fail("identity_id and a non-empty changes object are required")
+    patch = dict(changes)
+    if "persona" in patch and "role" not in patch:
+        patch["role"] = re.split(r"[.;:\n]", str(patch["persona"]).strip(), maxsplit=1)[0].strip()[:120]
+    patch.pop("persona", None)
     try:
-        data = await _call("PUT", f"{_CMS}/identity/{identity_id}", tenant_context, params=_LIVE, json=changes)
+        data = await _call("PATCH", f"{_CMS}/identity/{identity_id}", tenant_context, params=_LIVE, json=patch)
     except ToolCallError as exc:
         return _fail(str(exc), identity_id=identity_id)
     return {"status": "updated", "identity": data}
@@ -138,26 +200,47 @@ async def shielva_create_intent(
     bot_id: str,
     examples: list[str] | None = None,
     description: str = "",
+    intent_id: str | None = None,
+    label: str | None = None,
 ) -> dict[str, Any]:
-    """Create an intent with example phrasings the bot should match on."""
+    """Create an intent with example phrasings the bot should match on.
+
+    🚨 acp-core IntentCreate requires ``intent_id`` (a slug) and ``label``; it
+    has no ``name`` and no ``bot_id``. This tool sent name + bot_id, so nothing
+    was created — and classify nodes route on ``intentId``, so no flow could
+    branch. Intents are TENANT-WIDE: prefix the slug per bot (e.g. ``le_book``)
+    or two bots will fight over one intent. The ``intent_id`` returned is the
+    value a classify case's ``intentId`` must carry.
+    """
     if not name or not bot_id:
         return _fail("name and bot_id are required")
-    body = {"name": name, "bot_id": bot_id, "examples": examples or [], "description": description}
+    slug = _slug(intent_id or name)
+    body = {
+        "intent_id": slug,
+        "label": (label or name).strip(),
+        "description": description or None,
+        "examples": [str(e) for e in (examples or []) if str(e).strip()],
+    }
     try:
         data = await _call("POST", f"{_CMS}/intents", tenant_context, params=_LIVE, json=body)
     except ToolCallError as exc:
-        return _fail(str(exc), bot_id=bot_id)
-    return {"status": "created", "intent": data}
+        return _fail(str(exc), bot_id=bot_id, intent_id=slug)
+    doc = data if isinstance(data, dict) else {}
+    return {"status": "created", "intent_id": slug, "doc_id": doc.get("_id") or doc.get("id"), "intent": data}
 
 
 async def shielva_update_intent(
     tenant_context: TenantContext, intent_id: str, changes: dict[str, Any]
 ) -> dict[str, Any]:
-    """Change an intent — rename it, or add example phrasings."""
+    """Change an intent — relabel it, or add example phrasings. Pass the intent's doc id."""
     if not intent_id or not isinstance(changes, dict) or not changes:
         return _fail("intent_id and a non-empty changes object are required")
+    patch = dict(changes)
+    if "name" in patch and "label" not in patch:
+        patch["label"] = patch.pop("name")
+    patch.pop("bot_id", None)
     try:
-        data = await _call("PUT", f"{_CMS}/intents/{intent_id}", tenant_context, params=_LIVE, json=changes)
+        data = await _merge_put(tenant_context, f"{_CMS}/intents/{intent_id}", patch)
     except ToolCallError as exc:
         return _fail(str(exc), intent_id=intent_id)
     return {"status": "updated", "intent": data}
@@ -181,24 +264,38 @@ async def shielva_create_decision_rule(
     name: str,
     rule: dict[str, Any],
 ) -> dict[str, Any]:
-    """Create a decision rule: a condition over signals and what it triggers."""
+    """Create a decision rule that maps matching input to an intent.
+
+    ``rule`` must carry ``rule_type`` (exact | regex | keyword | ngram),
+    ``pattern`` and ``intent_id``; optional ``priority``, ``enabled``,
+    ``fuzzy_tolerance`` (0-3), ``description``. These are acp-core SignalRule's
+    required fields — the tool used to spread whatever it was given and 422.
+    """
     if not name or not isinstance(rule, dict) or not rule:
         return _fail("name and a non-empty rule object are required")
+    missing = [k for k in ("rule_type", "pattern", "intent_id") if not rule.get(k)]
+    if missing:
+        return _fail(
+            f"rule is missing {', '.join(missing)}. rule_type is one of exact, regex, keyword, ngram; "
+            "pattern is what to match; intent_id is the intent slug it maps to."
+        )
+    body = {"name": name, **{k: v for k, v in rule.items() if k not in _SERVER_KEYS}}
     try:
-        data = await _call("POST", f"{_CMS}/signals/rules", tenant_context, params=_LIVE, json={"name": name, **rule})
+        data = await _call("POST", f"{_CMS}/signals/rules", tenant_context, params=_LIVE, json=body)
     except ToolCallError as exc:
         return _fail(str(exc))
-    return {"status": "created", "rule": data}
+    doc = data if isinstance(data, dict) else {}
+    return {"status": "created", "rule_id": doc.get("_id") or doc.get("id") or doc.get("rule_id"), "rule": data}
 
 
 async def shielva_update_decision_rule(
     tenant_context: TenantContext, rule_id: str, changes: dict[str, Any]
 ) -> dict[str, Any]:
-    """Change a decision rule's condition or its effect."""
+    """Change a decision rule. Only the keys you pass change; the rest are kept."""
     if not rule_id or not isinstance(changes, dict) or not changes:
         return _fail("rule_id and a non-empty changes object are required")
     try:
-        data = await _call("PUT", f"{_CMS}/signals/rules/{rule_id}", tenant_context, params=_LIVE, json=changes)
+        data = await _merge_put(tenant_context, f"{_CMS}/signals/rules/{rule_id}", changes)
     except ToolCallError as exc:
         return _fail(str(exc), rule_id=rule_id)
     return {"status": "updated", "rule": data}
@@ -235,14 +332,20 @@ async def shielva_get_bot_config(tenant_context: TenantContext, bot_id: str) -> 
 
 
 async def shielva_set_bot_prompt(tenant_context: TenantContext, bot_id: str, prompt: str) -> dict[str, Any]:
-    """Replace a bot's system prompt — the standing instruction it answers under."""
+    """Replace a bot's system prompt — the standing instruction it answers under.
+
+    🚨 The endpoint reads ``system_prompt``. This sent ``prompt`` and got
+    400 "system_prompt is required" on every call.
+    """
     if not bot_id or not prompt:
         return _fail("bot_id and prompt are required")
     try:
-        await _call("PUT", f"/bots/{bot_id}/update-prompt", tenant_context, params=_LIVE, json={"prompt": prompt})
+        await _call(
+            "PUT", f"/bots/{bot_id}/update-prompt", tenant_context, params=_LIVE, json={"system_prompt": prompt}
+        )
     except ToolCallError as exc:
         return _fail(str(exc), bot_id=bot_id)
-    return {"status": "updated", "bot_id": bot_id, "field": "prompt"}
+    return {"status": "updated", "bot_id": bot_id, "field": "system_prompt", "length": len(prompt)}
 
 
 async def shielva_set_bot_variables(
@@ -363,17 +466,34 @@ async def shielva_set_bot_memory_policy(
     return {"status": "updated", "bot_id": bot_id, "field": "memory_policy"}
 
 
-async def shielva_set_bot_signals(
-    tenant_context: TenantContext, bot_id: str, signals: list[dict[str, Any]]
-) -> dict[str, Any]:
-    """Set the signals a bot emits — what decision rules can then act on."""
+async def shielva_set_bot_signals(tenant_context: TenantContext, bot_id: str, signals: list[Any]) -> dict[str, Any]:
+    """Set which decision rules are enabled for a bot. Pass rule ids (or rule objects).
+
+    🚨 THIS SILENTLY WIPED A BOT'S SIGNALS. The endpoint reads
+    ``enabled_signal_rule_ids`` with a default of ``[]``; the tool sent
+    ``signals``. Every call therefore stored an EMPTY list and reported
+    ``updated`` — disabling every rule the bot had. A non-empty input that yields
+    no ids now fails rather than clearing.
+    """
     if not bot_id or not isinstance(signals, list):
         return _fail("bot_id and a signals list are required")
+    ids: list[str] = []
+    for item in signals:
+        if isinstance(item, str) and item.strip():
+            ids.append(item.strip())
+        elif isinstance(item, dict):
+            rid = item.get("rule_id") or item.get("_id") or item.get("id")
+            if rid:
+                ids.append(str(rid))
+    if signals and not ids:
+        return _fail("None of the signals carried a rule id — refusing to clear the bot's rules.", bot_id=bot_id)
     try:
-        await _call("POST", f"/bots/{bot_id}/signals", tenant_context, params=_LIVE, json={"signals": signals})
+        await _call(
+            "POST", f"/bots/{bot_id}/signals", tenant_context, params=_LIVE, json={"enabled_signal_rule_ids": ids}
+        )
     except ToolCallError as exc:
         return _fail(str(exc), bot_id=bot_id)
-    return {"status": "updated", "bot_id": bot_id, "count": len(signals)}
+    return {"status": "updated", "bot_id": bot_id, "enabled_signal_rule_ids": ids}
 
 
 # ── action schemas: what a bot can DO ─────────────────────────────────
@@ -396,37 +516,50 @@ async def shielva_create_action_schema(
     operation: str,
     inputs: dict[str, Any] | None = None,
     description: str = "",
+    action_id: str | None = None,
+    method: str = "POST",
 ) -> dict[str, Any]:
-    """Create an action schema: a named connector call a flow can invoke.
+    """Create an action schema: a named connector call an `action` node can invoke.
 
-    🚨 Create this BEFORE the `action` node that points at it. A node whose
-    actionId names nothing saves cleanly and that branch does nothing at
-    runtime — see shielva_flow_guide.
+    🚨 Create this BEFORE the `action` node that points at it (see
+    shielva_flow_guide). acp-core ActionSchemaCreate requires ``action_id``,
+    ``label`` and ``source_type`` — the tool sent none of them. A connector call
+    is ``source_type="api"`` with ``api_config.connector_id`` (the connector),
+    ``endpoint`` (its operation) and ``param_mapping`` (inputs, which may use
+    ``{{entity.field}}`` templates). The returned ``action_id`` is what an action
+    node's ``actionId`` must carry.
     """
     if not name or not connector_type or not operation:
         return _fail("name, connector_type and operation are required")
+    slug = _slug(action_id or name)
     body = {
-        "name": name,
-        "connector_type": connector_type,
-        "operation": operation,
-        "inputs": inputs or {},
-        "description": description,
+        "action_id": slug,
+        "label": name,
+        "description": description or None,
+        "source_type": "api",
+        "api_config": {
+            "connector_id": connector_type,
+            "endpoint": operation,
+            "method": (method or "POST").upper(),
+            "param_mapping": {str(k): str(v) for k, v in (inputs or {}).items()},
+        },
     }
     try:
         data = await _call("POST", f"{_CMS}/action-schemas", tenant_context, params=_LIVE, json=body)
     except ToolCallError as exc:
-        return _fail(str(exc))
-    return {"status": "created", "action_schema": data}
+        return _fail(str(exc), action_id=slug)
+    doc = data if isinstance(data, dict) else {}
+    return {"status": "created", "action_id": slug, "doc_id": doc.get("_id") or doc.get("id"), "action_schema": data}
 
 
 async def shielva_update_action_schema(
     tenant_context: TenantContext, schema_id: str, changes: dict[str, Any]
 ) -> dict[str, Any]:
-    """Change an action schema's inputs, operation or name."""
+    """Change an action schema. Pass its doc id; only the keys you pass change."""
     if not schema_id or not isinstance(changes, dict) or not changes:
         return _fail("schema_id and a non-empty changes object are required")
     try:
-        data = await _call("PUT", f"{_CMS}/action-schemas/{schema_id}", tenant_context, params=_LIVE, json=changes)
+        data = await _merge_put(tenant_context, f"{_CMS}/action-schemas/{schema_id}", changes)
     except ToolCallError as exc:
         return _fail(str(exc), schema_id=schema_id)
     return {"status": "updated", "action_schema": data}
@@ -437,18 +570,22 @@ async def shielva_test_action_schema(
 ) -> dict[str, Any]:
     """Run an action schema against its connector with test inputs.
 
-    🚨 This REALLY CALLS the connector — it sends the mail, creates the lead. It
-    is a test of the wiring, not a dry run, so use inputs you are willing to have
-    land in the customer's third-party account.
+    ``schema_id`` is the schema's ``action_id`` slug (what create returned).
+    🚨 This REALLY CALLS the connector — it sends the mail, creates the lead.
+
+    acp-core ActionTestRequest requires ``action_id`` and takes the inputs as
+    ``sample_entities`` / ``sample_payload``; the tool sent ``schema_id`` and
+    ``inputs``, neither of which exists, so every test 422'd.
     """
     if not schema_id:
         return _fail("schema_id is required")
+    sample = dict(inputs or {})
     try:
         data = await _call(
             "POST",
             f"{_CMS}/action-schemas/test",
             tenant_context,
-            json={"schema_id": schema_id, "inputs": inputs or {}},
+            json={"action_id": schema_id, "sample_entities": sample, "sample_payload": sample},
         )
     except ToolCallError as exc:
         return _fail(str(exc), schema_id=schema_id)
@@ -474,12 +611,15 @@ async def shielva_create_painter(
     painter_type: str = "card",
     template: dict[str, Any] | None = None,
     custom: bool = False,
+    description: str = "",
 ) -> dict[str, Any]:
     """Create a painter — a card or table template for rendering data.
 
-    `custom=False` builds from the stock template for `painter_type`; `custom=True`
-    takes the `template` you supply verbatim. A custom painter is yours to keep
-    correct — nothing validates its fields against the data a flow will feed it.
+    ``painter_type`` is one of datatable | chart | card | carousel | form |
+    pdf_viewer | modal | timeline | custom. ``custom=True`` makes it a custom
+    painter whose ``template`` is taken verbatim. acp-core PainterConfigCreate
+    carries type-specific settings in ``config``; this tool used to send
+    ``custom`` and ``template``, which it silently dropped.
     """
     if not name:
         return _fail("name is required")
@@ -487,15 +627,17 @@ async def shielva_create_painter(
         return _fail("a custom painter needs a template")
     body = {
         "name": name,
-        "painter_type": painter_type,
-        "custom": bool(custom),
-        "template": template or {},
+        "painter_type": "custom" if custom else (painter_type or "card"),
+        "config": dict(template or {}),
+        "description": description or None,
+        "status": "draft",
     }
     try:
         data = await _call("POST", f"{_CMS}/painters", tenant_context, params=_LIVE, json=body)
     except ToolCallError as exc:
         return _fail(str(exc))
-    return {"status": "created", "painter": data}
+    doc = data if isinstance(data, dict) else {}
+    return {"status": "created", "painter_id": doc.get("_id") or doc.get("id"), "painter": data}
 
 
 async def shielva_publish_painter(tenant_context: TenantContext, painter_id: str) -> dict[str, Any]:
@@ -553,6 +695,38 @@ BOT_CONFIG_TOOL_DEFINITIONS: list[tuple[ToolDefinition, Any]] = [
             {"name": "persona", "type": "string", "description": "Who the bot is", "required": False},
             {"name": "tone", "type": "string", "description": "How it speaks", "required": False},
             {"name": "greeting", "type": "string", "description": "Opening line", "required": False},
+            {
+                "name": "role",
+                "type": "string",
+                "description": "Short primary role, e.g. Lettings assistant. Defaults to the first clause of persona.",
+                "required": False,
+            },
+            {
+                "name": "personality_traits",
+                "type": "array",
+                "description": "Personality traits",
+                "required": False,
+                "items": {"type": "string"},
+            },
+            {
+                "name": "boundaries",
+                "type": "array",
+                "description": "Hard boundaries it must never cross",
+                "required": False,
+                "items": {"type": "string"},
+            },
+            {
+                "name": "fallback_message",
+                "type": "string",
+                "description": "What it says when it cannot help",
+                "required": False,
+            },
+            {
+                "name": "is_active",
+                "type": "boolean",
+                "description": "Make this the live persona for the bot now",
+                "required": False,
+            },
         ],
         shielva_create_identity,
     ),
@@ -579,12 +753,19 @@ BOT_CONFIG_TOOL_DEFINITIONS: list[tuple[ToolDefinition, Any]] = [
     ),
     _tool(
         "shielva_create_intent",
-        "Create an intent with example phrasings the bot should match on.",
+        "Create an intent (tenant-wide) with example phrasings. Returns the intent_id slug a classify case's intentId must carry.",
         [
             {"name": "name", "type": "string", "description": "Intent name", "required": True},
             _P_BOT,
             {"name": "examples", "type": "array", "description": "Example phrasings", "required": False},
             {"name": "description", "type": "string", "description": "What it means", "required": False},
+            {
+                "name": "intent_id",
+                "type": "string",
+                "description": "Slug to use; defaults to a slug of name. Intents are tenant-wide, so prefix per bot.",
+                "required": False,
+            },
+            {"name": "label", "type": "string", "description": "Human label; defaults to name", "required": False},
         ],
         shielva_create_intent,
     ),
@@ -605,7 +786,7 @@ BOT_CONFIG_TOOL_DEFINITIONS: list[tuple[ToolDefinition, Any]] = [
     ),
     _tool(
         "shielva_create_decision_rule",
-        "Create a decision rule: a condition over signals, and what it triggers.",
+        "Create a decision rule mapping matching input to an intent. rule needs rule_type (exact|regex|keyword|ngram), pattern and intent_id.",
         [
             {"name": "name", "type": "string", "description": "Rule name", "required": True},
             {"name": "rule", "type": "object", "description": "Condition and effect", "required": True},
@@ -672,7 +853,7 @@ BOT_CONFIG_TOOL_DEFINITIONS: list[tuple[ToolDefinition, Any]] = [
     ),
     _tool(
         "shielva_set_bot_signals",
-        "Set the signals a bot emits — what decision rules can then act on.",
+        "Set which decision rules are enabled for a bot — pass the rule ids.",
         [_P_BOT, {"name": "signals", "type": "array", "description": "Signal list", "required": True}],
         shielva_set_bot_signals,
     ),
@@ -684,15 +865,25 @@ BOT_CONFIG_TOOL_DEFINITIONS: list[tuple[ToolDefinition, Any]] = [
     ),
     _tool(
         "shielva_create_action_schema",
-        "Create an action schema: a named connector call a flow can invoke. Create this BEFORE "
-        "the action node that points at it — a node whose actionId names nothing saves cleanly "
-        "and then does nothing at runtime.",
+        "Create an action schema (a connector call) BEFORE the action node that uses it. Returns the action_id the node's actionId must carry.",
         [
             {"name": "name", "type": "string", "description": "Schema name", "required": True},
             {"name": "connector_type", "type": "string", "description": "Connector type", "required": True},
             {"name": "operation", "type": "string", "description": "Operation to call", "required": True},
             {"name": "inputs", "type": "object", "description": "Input mapping", "required": False},
             {"name": "description", "type": "string", "description": "What it does", "required": False},
+            {
+                "name": "action_id",
+                "type": "string",
+                "description": "Slug an action node's actionId will carry; defaults to a slug of name",
+                "required": False,
+            },
+            {
+                "name": "method",
+                "type": "string",
+                "description": "HTTP method for the connector call; default POST",
+                "required": False,
+            },
         ],
         shielva_create_action_schema,
     ),
@@ -707,8 +898,7 @@ BOT_CONFIG_TOOL_DEFINITIONS: list[tuple[ToolDefinition, Any]] = [
     ),
     _tool(
         "shielva_test_action_schema",
-        "Run an action schema against its connector. REALLY CALLS IT — sends the mail, creates the "
-        "lead. Use inputs you are willing to have land in the customer's third-party account.",
+        "Run an action schema for real against its connector. schema_id is the action_id slug.",
         [
             {"name": "schema_id", "type": "string", "description": "Schema id", "required": True},
             {"name": "inputs", "type": "object", "description": "Test inputs", "required": False},
@@ -731,6 +921,7 @@ BOT_CONFIG_TOOL_DEFINITIONS: list[tuple[ToolDefinition, Any]] = [
             {"name": "painter_type", "type": "string", "description": "card or table", "required": False},
             {"name": "template", "type": "object", "description": "Template, for custom", "required": False},
             {"name": "custom", "type": "boolean", "description": "Custom template", "required": False},
+            {"name": "description", "type": "string", "description": "What the painter shows", "required": False},
         ],
         shielva_create_painter,
     ),
