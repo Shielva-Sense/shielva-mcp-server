@@ -191,6 +191,13 @@ async def lifespan(app: FastAPI):
 
     register_meeting_tools(tool_registry)
 
+    # 🚨 Dialog-flow tools — the PRODUCT surface, unlike the two above. These
+    # are what let a customer admin's MCP key actually build a bot, and what
+    # the grant model has been permitting with nothing to exercise it.
+    from src.tools.flow_tools import register_flow_tools
+
+    register_flow_tools(tool_registry)
+
     # Inject dependencies into tool_registry
     tool_registry.set_rag_client(rag_client)
     tool_registry.set_bot_registry(bot_registry)

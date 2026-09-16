@@ -31,6 +31,7 @@ from fastapi.responses import JSONResponse
 
 from src.domain.chat.errors import SessionNotFoundError, SessionStateError
 from src.domain.shared.tenant import TenantContext
+from src.tools._caller import remember_caller_credential
 
 from .dispatcher import MCPDispatcher
 from .errors import (
@@ -90,6 +91,14 @@ def _tenant_from_request(request: Request) -> TenantContext:
             detail="Missing X-Tenant-ID header",
             headers={"WWW-Authenticate": www_authenticate_value()},
         )
+    # 🚨 Captured BEFORE the context is built, so a tool can call back into the
+    # platform AS THIS CALLER. A service token here would reach every bot in
+    # every workspace and would step straight outside the MCP grant map — the
+    # grants would still be configured and would protect nothing. Held in a
+    # ContextVar rather than on TenantContext, which is logged all over this
+    # service. See src/tools/_caller.py.
+    remember_caller_credential(request.headers)
+
     return TenantContext(
         tenant_id=tenant_id,
         user_id=request.headers.get("X-User-ID") or "mcp-client",
