@@ -24,6 +24,23 @@ import structlog
 
 from src.protocol.models import TenantContext
 
+#: 🚨 These tools are INTERNAL INFRASTRUCTURE, not product surface. codegen_*
+#: backs the fix-agent endpoint; create_tms_* backs post-meeting transcript
+#: extraction, and TMS is not deployed to production any more. Neither is
+#: something a customer's MCP client should ever see.
+#:
+#: They already declared `enabled_by_default=False`, which said exactly that —
+#: and NOTHING ENFORCED IT. `Tool.is_permitted_for` consults
+#: `required_permissions` only, and these declared none, so "empty permissions =
+#: public to every authenticated tenant" applied and all ten were advertised in
+#: `tools/list` to every connected client, platform owner and customer alike.
+#:
+#: Requiring a permission no tenant holds makes the declaration real. Internal
+#: service callers are unaffected: `TenantContext.is_internal_service` bypasses
+#: the gate before permissions are consulted.
+INTERNAL_ONLY: list[str] = ["shielva:internal"]
+
+
 logger = structlog.get_logger(__name__)
 
 _TMS_URL = os.getenv("TMS_URL", "https://localhost:8002")
@@ -291,7 +308,7 @@ MEETING_TOOL_DEFINITIONS = [
                     "required": False,
                 },
             ],
-            requires_permissions=[],
+            requires_permissions=INTERNAL_ONLY,
             enabled_by_default=False,
         ),
         create_tms_goal,
@@ -335,7 +352,7 @@ MEETING_TOOL_DEFINITIONS = [
                     "required": False,
                 },
             ],
-            requires_permissions=[],
+            requires_permissions=INTERNAL_ONLY,
             enabled_by_default=False,
         ),
         create_tms_epic,
@@ -386,7 +403,7 @@ MEETING_TOOL_DEFINITIONS = [
                     "required": False,
                 },
             ],
-            requires_permissions=[],
+            requires_permissions=INTERNAL_ONLY,
             enabled_by_default=False,
         ),
         create_tms_sprint,
@@ -448,7 +465,7 @@ MEETING_TOOL_DEFINITIONS = [
                     "required": False,
                 },
             ],
-            requires_permissions=[],
+            requires_permissions=INTERNAL_ONLY,
             enabled_by_default=False,
         ),
         create_tms_ticket,
@@ -474,7 +491,7 @@ MEETING_TOOL_DEFINITIONS = [
                     "required": False,
                 },
             ],
-            requires_permissions=[],
+            requires_permissions=INTERNAL_ONLY,
             enabled_by_default=False,
         ),
         meeting_context_query,
@@ -494,7 +511,7 @@ MEETING_TOOL_DEFINITIONS = [
                     "required": True,
                 },
             ],
-            requires_permissions=[],
+            requires_permissions=INTERNAL_ONLY,
             enabled_by_default=False,
         ),
         get_delegation_rules,

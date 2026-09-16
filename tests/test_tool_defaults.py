@@ -101,3 +101,47 @@ def test_no_tool_declares_a_permission_the_platform_cannot_grant():
     defs = _tool_defs()
     for name, d in defs.items():
         assert "rag_access" not in d["perms"], f"{name} still requires the ungrantable rag_access"
+
+
+def test_internal_tools_are_not_advertised_to_a_tenant():
+    """🚨 A platform owner connecting Claude saw fifteen tools that are not
+    product: codegen_* (the fix-agent endpoint) and create_tms_* (post-meeting
+    transcript extraction, and TMS is not even in production any more).
+
+    Every one of them declared `enabled_by_default=False` — the author saying
+    "not on for everyone" — and NOTHING read it. `Tool.is_permitted_for`
+    consults `required_permissions` only, and these declared none, which the
+    entity treats as public to every authenticated tenant. A declaration that
+    enforces nothing is worse than no declaration: it reads like a control.
+    """
+    from src.tools.codegen_tools import INTERNAL_ONLY as CODEGEN_ONLY
+    from src.tools.meeting_tools import INTERNAL_ONLY as MEETING_ONLY
+
+    assert CODEGEN_ONLY, "codegen tools must require something"
+    assert MEETING_ONLY, "meeting tools must require something"
+
+    from src.domain.shared.tenant import TenantContext as DomainTenant
+    from src.domain.tools.entities import Tool
+    from src.domain.tools.value_objects import ToolName, ToolSchema
+
+    gated = Tool(
+        name=ToolName("create_tms_epic"),
+        description="x",
+        input_schema=ToolSchema(json_schema={"type": "object"}),
+        required_permissions=tuple(MEETING_ONLY),
+    )
+    customer = DomainTenant(
+        tenant_id="t1", user_id="u1", user_email="someone@example.com", role="customer", permissions=()
+    )
+    assert not gated.is_permitted_for(customer), "a customer can still see an internal tool"
+
+
+def test_every_codegen_and_tms_tool_declares_the_internal_permission():
+    """Belt and braces: one forgotten entry re-publishes that tool to everyone."""
+    import re
+    from pathlib import Path
+
+    for path in ("src/tools/codegen_tools.py", "src/tools/meeting_tools.py"):
+        src = Path(path).read_text()
+        assert "requires_permissions=[]" not in src, f"{path} still has an ungated tool"
+        assert re.search(r"requires_permissions=INTERNAL_ONLY", src), path
