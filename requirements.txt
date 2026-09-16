@@ -66,5 +66,21 @@ vecs>=0.4.0                 # Supabase pgvector client (SupabaseVectorStore)
 qdrant-client>=1.7.0        # vector store
 numpy>=1.24.0
 rank-bm25>=0.2.2            # hybrid BM25 retrieval
-sentence-transformers>=2.2.0  # CrossEncoder reranking
+# 🚨 sentence-transformers REMOVED — it cost 5.3GB and ran zero lines.
+#
+# It pulls torch, and torch's default wheel is the CUDA build: nvidia 3.2GB +
+# torch 1.2GB + triton 897MB, in a service whose own source is 1.1MB. That took
+# the image to 10.8GB, which is more than the rollout's 600s progress deadline
+# allows for a pull — so every MCP deploy aborted mid-pull and rolled back, all
+# day, looking like a broken image.
+#
+# Nothing used it:
+#   * CrossEncoderReranker is defined and exported and NEVER instantiated.
+#   * The local embedder path needs EMBEDDING_PROVIDER=local; the default is
+#     openai and local is set nowhere in prod.
+#
+# Both imports are lazy (inside the functions), so removing the package breaks
+# no import. If either path is ever wanted, add `sentence-transformers` back
+# AND pin the CPU wheel — `--extra-index-url https://download.pytorch.org/whl/cpu`
+# — or this returns.
 cohere>=4.0.0              # Cohere reranking

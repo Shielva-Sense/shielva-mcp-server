@@ -169,10 +169,30 @@ class EmbeddingClient:
             return self._embed_mock(texts)
 
     async def _embed_local(self, texts: list[str]) -> list[list[float]]:
-        """Generate embeddings using local model."""
+        """Generate embeddings using a local model.
+
+        🚨 NOT INSTALLED BY DEFAULT. `sentence-transformers` was removed from
+        requirements: it pulls the CUDA torch stack (5.3GB) for a path nothing
+        in this service configures — the provider defaults to `openai` and
+        `local` is set nowhere. Install it deliberately, with the CPU wheel, to
+        use this.
+        """
         try:
             from sentence_transformers import SentenceTransformer
+        except ImportError as exc:
+            # 🚨 RAISE, do not fall back. The fallback below returns RANDOM
+            # vectors, and random vectors in a retrieval system do not fail —
+            # they return confident nonsense, for every query, until somebody
+            # notices the answers are wrong. An operator who asked for local
+            # embeddings and got mock ones has no way to tell.
+            raise RuntimeError(
+                "EMBEDDING_PROVIDER=local needs sentence-transformers, which is not installed. "
+                "Install it with the CPU wheel "
+                "(--extra-index-url https://download.pytorch.org/whl/cpu) — the default wheel "
+                "pulls 5.3GB of CUDA tooling."
+            ) from exc
 
+        try:
             if not self._client:
                 self._client = SentenceTransformer(self.config.model)
 

@@ -145,3 +145,43 @@ def test_every_codegen_and_tms_tool_declares_the_internal_permission():
         src = Path(path).read_text()
         assert "requires_permissions=[]" not in src, f"{path} still has an ungated tool"
         assert re.search(r"requires_permissions=INTERNAL_ONLY", src), path
+
+
+def test_the_cuda_torch_stack_is_not_a_dependency():
+    """🚨 5.3GB for zero executed lines.
+
+    `sentence-transformers` pulls torch, and torch's default wheel is the CUDA
+    build: nvidia 3.2GB + torch 1.2GB + triton 897MB, in a service whose own
+    source is 1.1MB. It took the image to 10.8GB — more than the rollout's 600s
+    progress deadline allows for a pull — so every MCP deploy aborted mid-pull
+    and rolled back, looking like a broken image rather than a fat one.
+
+    Nothing used it: CrossEncoderReranker is never instantiated, and the local
+    embedder path needs EMBEDDING_PROVIDER=local, which is set nowhere.
+
+    If it is ever needed again, pin the CPU wheel — this test names that so the
+    next person does not re-add the CUDA one by accident.
+    """
+    from pathlib import Path
+
+    req = Path(__file__).resolve().parent.parent / "requirements.txt"
+    lines = [ln.strip() for ln in req.read_text().splitlines() if ln.strip() and not ln.strip().startswith("#")]
+    for banned in ("sentence-transformers", "torch", "nvidia-", "triton"):
+        assert not any(ln.lower().startswith(banned) for ln in lines), (
+            f"{banned} is back in requirements.txt — if it is genuinely needed, pin the CPU wheel "
+            "(--extra-index-url https://download.pytorch.org/whl/cpu) or the image grows by 5.3GB"
+        )
+
+
+def test_local_embeddings_fail_loudly_rather_than_returning_noise():
+    """🚨 `_embed_local` used to catch ImportError and fall back to
+    `_embed_mock`, which returns RANDOM vectors. Random vectors in a retrieval
+    system do not fail — they return confident nonsense for every query until
+    somebody notices the answers are wrong."""
+    import inspect
+
+    from src.embedder import EmbeddingClient
+
+    src = inspect.getsource(EmbeddingClient._embed_local)
+    assert "raise RuntimeError" in src
+    assert "except ImportError" in src
