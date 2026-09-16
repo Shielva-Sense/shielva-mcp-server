@@ -36,91 +36,17 @@ nothing.
 
 from __future__ import annotations
 
-import os
 from typing import Any
 
-import httpx
 import structlog
 
 from src.protocol.models import TenantContext, ToolDefinition
-from src.tools._caller import caller_auth_headers, has_caller_credential
+from src.tools._gateway import LIVE as _LIVE
+from src.tools._gateway import ToolCallError as FlowToolError
+from src.tools._gateway import call as _call
+from src.tools._gateway import fail as _fail
 
 logger = structlog.get_logger(__name__)
-
-#: 🚨 The gateway, not core-api directly. Going straight to the service would
-#: skip the grants plugin, which is the only thing deciding whether this
-#: credential may touch this route at all.
-_GATEWAY_URL = os.getenv("GATEWAY_URL", "https://localhost:8000").rstrip("/")
-_TIMEOUT = 30.0
-_VERIFY = os.getenv("MCP_UPSTREAM_VERIFY_TLS", "").strip().lower() in ("1", "true", "yes")
-
-#: 🚨 Live updates ON for everything here. The gateway already stamps
-#: `X-Shielva-Via: mcp` so core-api would publish anyway; sending it explicitly
-#: means these tools stream even if that header is ever dropped, and documents
-#: the intent at the call site. A browser's own saves stay silent — it sends
-#: neither the header nor this flag.
-_LIVE = {"sse": "true"}
-
-
-class FlowToolError(RuntimeError):
-    """An upstream refusal, surfaced to the model as text it can act on."""
-
-
-def _fail(message: str, **fields: Any) -> dict[str, Any]:
-    logger.warning("flow_tool_failed", error=message, **fields)
-    return {"status": "failed", "error": message}
-
-
-async def _call(
-    method: str,
-    path: str,
-    tenant_context: TenantContext,
-    *,
-    params: dict[str, str] | None = None,
-    json: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    """One request to the gateway, as the caller.
-
-    🚨 Refuses rather than falling back to an unauthenticated call. Without the
-    caller's credential the gateway would either reject us or — worse, if this
-    service ever gains one of its own — answer as the service, quietly stepping
-    outside the grant map.
-    """
-    if not has_caller_credential():
-        raise FlowToolError(
-            "No caller credential on this request, so the workspace cannot be reached "
-            "on your behalf. Reconnect the Shielva connector and try again."
-        )
-
-    headers = caller_auth_headers()
-    headers["X-Tenant-ID"] = tenant_context.tenant_id
-    headers["Content-Type"] = "application/json"
-
-    async with httpx.AsyncClient(verify=_VERIFY, timeout=_TIMEOUT) as client:
-        resp = await client.request(
-            method,
-            f"{_GATEWAY_URL}{path}",
-            headers=headers,
-            params=params,
-            json=json,
-        )
-
-    if resp.status_code in (401, 403):
-        # 🚨 Say WHICH thing was refused. "403" alone sends a model into a retry
-        # loop; naming the grant tells the person reading the transcript what to
-        # change in the admin screen.
-        raise FlowToolError(
-            f"Your MCP key is not permitted to {method} {path}. A platform owner controls this under MCP API Access."
-        )
-    if resp.status_code == 404:
-        raise FlowToolError(f"Not found: {path}")
-    if resp.status_code >= 400:
-        raise FlowToolError(f"{method} {path} failed with {resp.status_code}: {resp.text[:200]}")
-
-    try:
-        return resp.json()
-    except ValueError:
-        return {}
 
 
 # ── handlers ──────────────────────────────────────────────────────────

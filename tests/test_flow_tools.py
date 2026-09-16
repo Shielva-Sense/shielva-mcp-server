@@ -86,10 +86,19 @@ def test_tools_go_through_the_gateway_not_straight_to_the_service():
     thing deciding whether this credential may touch this route."""
     import inspect
 
+    from src.tools import _gateway
+
+    # The one place a URL is chosen, and it is the gateway.
+    gw = inspect.getsource(_gateway)
+    assert "_GATEWAY_URL" in gw
+    assert "core-api:" not in gw
+    assert "cms-core:" not in gw
+
+    # 🚨 And a tool module must not reach around it. An httpx client built here
+    # would be a second path to customer data that skips every decision
+    # _gateway.py makes — which is exactly how a service token creeps back in.
     src = inspect.getsource(flow_tools)
-    assert "_GATEWAY_URL" in src
-    assert "core-api:" not in src
-    assert "http://bot:" not in src
+    assert "httpx" not in src, "flow_tools must call the platform through _gateway only"
 
 
 def test_every_write_asks_for_live_updates():
