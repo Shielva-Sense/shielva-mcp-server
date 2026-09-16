@@ -303,6 +303,143 @@ async def shielva_set_bot_signals(
     return {"status": "updated", "bot_id": bot_id, "count": len(signals)}
 
 
+# ── action schemas: what a bot can DO ─────────────────────────────────
+
+
+async def shielva_list_action_schemas(tenant_context: TenantContext) -> dict[str, Any]:
+    """List action schemas — the connector calls an `action` flow node can point at."""
+    try:
+        data = await _call("GET", f"{_CMS}/action-schemas", tenant_context)
+    except ToolCallError as exc:
+        return _fail(str(exc))
+    rows = _items(data)
+    return {"status": "ok", "count": len(rows), "action_schemas": rows}
+
+
+async def shielva_create_action_schema(
+    tenant_context: TenantContext,
+    name: str,
+    connector_type: str,
+    operation: str,
+    inputs: dict[str, Any] | None = None,
+    description: str = "",
+) -> dict[str, Any]:
+    """Create an action schema: a named connector call a flow can invoke.
+
+    🚨 Create this BEFORE the `action` node that points at it. A node whose
+    actionId names nothing saves cleanly and that branch does nothing at
+    runtime — see shielva_flow_guide.
+    """
+    if not name or not connector_type or not operation:
+        return _fail("name, connector_type and operation are required")
+    body = {
+        "name": name,
+        "connector_type": connector_type,
+        "operation": operation,
+        "inputs": inputs or {},
+        "description": description,
+    }
+    try:
+        data = await _call("POST", f"{_CMS}/action-schemas", tenant_context, params=_LIVE, json=body)
+    except ToolCallError as exc:
+        return _fail(str(exc))
+    return {"status": "created", "action_schema": data}
+
+
+async def shielva_update_action_schema(
+    tenant_context: TenantContext, schema_id: str, changes: dict[str, Any]
+) -> dict[str, Any]:
+    """Change an action schema's inputs, operation or name."""
+    if not schema_id or not isinstance(changes, dict) or not changes:
+        return _fail("schema_id and a non-empty changes object are required")
+    try:
+        data = await _call("PUT", f"{_CMS}/action-schemas/{schema_id}", tenant_context, params=_LIVE, json=changes)
+    except ToolCallError as exc:
+        return _fail(str(exc), schema_id=schema_id)
+    return {"status": "updated", "action_schema": data}
+
+
+async def shielva_test_action_schema(
+    tenant_context: TenantContext, schema_id: str, inputs: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """Run an action schema against its connector with test inputs.
+
+    🚨 This REALLY CALLS the connector — it sends the mail, creates the lead. It
+    is a test of the wiring, not a dry run, so use inputs you are willing to have
+    land in the customer's third-party account.
+    """
+    if not schema_id:
+        return _fail("schema_id is required")
+    try:
+        data = await _call(
+            "POST",
+            f"{_CMS}/action-schemas/test",
+            tenant_context,
+            json={"schema_id": schema_id, "inputs": inputs or {}},
+        )
+    except ToolCallError as exc:
+        return _fail(str(exc), schema_id=schema_id)
+    return {"status": "tested", "result": data}
+
+
+# ── painters: how a bot RENDERS ───────────────────────────────────────
+
+
+async def shielva_list_painters(tenant_context: TenantContext) -> dict[str, Any]:
+    """List painters — the card/table templates a `painter` node renders with."""
+    try:
+        data = await _call("GET", f"{_CMS}/painters", tenant_context)
+    except ToolCallError as exc:
+        return _fail(str(exc))
+    rows = _items(data)
+    return {"status": "ok", "count": len(rows), "painters": rows}
+
+
+async def shielva_create_painter(
+    tenant_context: TenantContext,
+    name: str,
+    painter_type: str = "card",
+    template: dict[str, Any] | None = None,
+    custom: bool = False,
+) -> dict[str, Any]:
+    """Create a painter — a card or table template for rendering data.
+
+    `custom=False` builds from the stock template for `painter_type`; `custom=True`
+    takes the `template` you supply verbatim. A custom painter is yours to keep
+    correct — nothing validates its fields against the data a flow will feed it.
+    """
+    if not name:
+        return _fail("name is required")
+    if custom and not template:
+        return _fail("a custom painter needs a template")
+    body = {
+        "name": name,
+        "painter_type": painter_type,
+        "custom": bool(custom),
+        "template": template or {},
+    }
+    try:
+        data = await _call("POST", f"{_CMS}/painters", tenant_context, params=_LIVE, json=body)
+    except ToolCallError as exc:
+        return _fail(str(exc))
+    return {"status": "created", "painter": data}
+
+
+async def shielva_publish_painter(tenant_context: TenantContext, painter_id: str) -> dict[str, Any]:
+    """Publish a painter so flows can render with it.
+
+    🚨 Separate from creating it, deliberately: a painter can be written and
+    reviewed before any conversation renders with it.
+    """
+    if not painter_id:
+        return _fail("painter_id is required")
+    try:
+        await _call("POST", f"{_CMS}/painters/{painter_id}/publish", tenant_context, params=_LIVE)
+    except ToolCallError as exc:
+        return _fail(str(exc), painter_id=painter_id)
+    return {"status": "published", "painter_id": painter_id}
+
+
 # ── definitions ───────────────────────────────────────────────────────
 
 _P_BOT = {"name": "bot_id", "type": "string", "description": "The bot's id", "required": True}
@@ -453,6 +590,71 @@ BOT_CONFIG_TOOL_DEFINITIONS: list[tuple[ToolDefinition, Any]] = [
         "Set the signals a bot emits — what decision rules can then act on.",
         [_P_BOT, {"name": "signals", "type": "array", "description": "Signal list", "required": True}],
         shielva_set_bot_signals,
+    ),
+    _tool(
+        "shielva_list_action_schemas",
+        "List action schemas — the connector calls an `action` flow node can point at.",
+        [],
+        shielva_list_action_schemas,
+    ),
+    _tool(
+        "shielva_create_action_schema",
+        "Create an action schema: a named connector call a flow can invoke. Create this BEFORE "
+        "the action node that points at it — a node whose actionId names nothing saves cleanly "
+        "and then does nothing at runtime.",
+        [
+            {"name": "name", "type": "string", "description": "Schema name", "required": True},
+            {"name": "connector_type", "type": "string", "description": "Connector type", "required": True},
+            {"name": "operation", "type": "string", "description": "Operation to call", "required": True},
+            {"name": "inputs", "type": "object", "description": "Input mapping", "required": False},
+            {"name": "description", "type": "string", "description": "What it does", "required": False},
+        ],
+        shielva_create_action_schema,
+    ),
+    _tool(
+        "shielva_update_action_schema",
+        "Change an action schema's inputs, operation or name.",
+        [
+            {"name": "schema_id", "type": "string", "description": "Schema id", "required": True},
+            {"name": "changes", "type": "object", "description": "Fields to change", "required": True},
+        ],
+        shielva_update_action_schema,
+    ),
+    _tool(
+        "shielva_test_action_schema",
+        "Run an action schema against its connector. REALLY CALLS IT — sends the mail, creates the "
+        "lead. Use inputs you are willing to have land in the customer's third-party account.",
+        [
+            {"name": "schema_id", "type": "string", "description": "Schema id", "required": True},
+            {"name": "inputs", "type": "object", "description": "Test inputs", "required": False},
+        ],
+        shielva_test_action_schema,
+    ),
+    _tool(
+        "shielva_list_painters",
+        "List painters — the card/table templates a `painter` flow node renders with.",
+        [],
+        shielva_list_painters,
+    ),
+    _tool(
+        "shielva_create_painter",
+        "Create a painter: a card or table template. custom=False uses the stock template for the "
+        "type; custom=True takes your template verbatim and nothing validates it against the data "
+        "a flow will feed it.",
+        [
+            {"name": "name", "type": "string", "description": "Painter name", "required": True},
+            {"name": "painter_type", "type": "string", "description": "card or table", "required": False},
+            {"name": "template", "type": "object", "description": "Template, for custom", "required": False},
+            {"name": "custom", "type": "boolean", "description": "Custom template", "required": False},
+        ],
+        shielva_create_painter,
+    ),
+    _tool(
+        "shielva_publish_painter",
+        "Publish a painter so flows can render with it. Separate from creating it, so a painter can "
+        "be reviewed before any conversation renders with it.",
+        [{"name": "painter_id", "type": "string", "description": "Painter id", "required": True}],
+        shielva_publish_painter,
     ),
 ]
 

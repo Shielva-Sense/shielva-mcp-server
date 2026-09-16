@@ -202,6 +202,10 @@ async def lifespan(app: FastAPI):
 
     register_bot_config_tools(tool_registry)
 
+    from src.tools.flow_knowledge import register_flow_knowledge_tools
+
+    register_flow_knowledge_tools(tool_registry)
+
     # Inject dependencies into tool_registry
     tool_registry.set_rag_client(rag_client)
     tool_registry.set_bot_registry(bot_registry)
