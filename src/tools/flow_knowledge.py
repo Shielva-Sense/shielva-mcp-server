@@ -117,6 +117,34 @@ NODE_KINDS: list[dict[str, Any]] = [
     {"kind": "map", "label": "Map", "does": "transform each item of a list", "key_fields": []},
     {"kind": "sort", "label": "Sort", "does": "order a list", "key_fields": []},
     {"kind": "automap", "label": "Auto-map", "does": "map connector output onto flow variables", "key_fields": []},
+    {
+        "kind": "mail",
+        "label": "Mail",
+        "does": "send an email through a connector — NO action schema needed",
+        "key_fields": ["capConnector", "capAction", "capFields"],
+        "requires": "the mail.send capability enabled on the bot (shielva_set_bot_capability)",
+    },
+    {
+        "kind": "sms",
+        "label": "SMS",
+        "does": "send a text through a connector — NO action schema needed",
+        "key_fields": ["capConnector", "capAction", "capFields"],
+        "requires": "the sms.send capability enabled on the bot",
+    },
+    {
+        "kind": "calendar",
+        "label": "Calendar",
+        "does": "create an event through a connector — NO action schema needed",
+        "key_fields": ["capConnector", "capAction", "capFields"],
+        "requires": "the calendar.create_event capability enabled on the bot",
+    },
+    {
+        "kind": "crm",
+        "label": "CRM",
+        "does": "create a lead through a connector — NO action schema needed",
+        "key_fields": ["capConnector", "capAction", "capFields"],
+        "requires": "the crm.create_lead capability enabled on the bot",
+    },
     {"kind": "start", "label": "Start", "does": "the entry node", "key_fields": []},
     {"kind": "startover", "label": "Start over", "does": "restart the conversation", "key_fields": []},
 ]
@@ -132,6 +160,51 @@ CAPABILITY_OF_KIND: dict[str, str] = {
     "calendar": "calendar.create_event",
     "crm": "crm.create_lead",
 }
+
+
+#: 🚨 TWO WAYS TO CALL A CONNECTOR, and picking the wrong one is the difference
+#: between a flow that works and an afternoon spent authoring a schema nobody
+#: needed. The owner's rule, which matches what the runtime does:
+#:
+#:   Just EXECUTE the API (send the mail, create the lead)
+#:       → capability node. NO action schema. The node names the connector and
+#:         action itself and carries canonical fields.
+#:
+#:   RENDER the response (show a card or a table of what came back)
+#:       → action schema, then a painter. A `static` painter renders from a
+#:         chosen action schema's RESPONSE SHAPE — that shape is what the schema
+#:         exists to describe, and without it there is nothing to build columns
+#:         from.
+#:
+#: 🚨 CANONICAL FIELD NAMES, NEVER THE VENDOR'S. A capability node stores `to`,
+#: `subject`, `body`; each connector declares a `map` in its `capability_actions`
+#: saying where those land (`to`→`dst`, `body`→`text`). That translation is the
+#: entire reason these nodes exist: it lets a workspace swap Twilio for Plivo, or
+#: Gmail for Outlook, without re-typing a single field in the flow. Sending
+#: vendor names straight through reaches the provider with parameters it has
+#: never heard of — a 400 that reads like a credentials problem.
+CAPABILITY_NODE_FIELDS: dict[str, Any] = {
+    "capConnector": "Connector TYPE to call, e.g. google_gmail_connector. Omit to use the bot's configured provider.",
+    "capAction": "The connector's own action name, e.g. send_email. From the connector's capability_actions.",
+    "capFields": "CANONICAL field names only — to, subject, body. The connector maps them to its own params.",
+    "capOpaque": "true when the provider takes ONE opaque object instead of per-field values.",
+    "capPayload": "The raw JSON body, used only when capOpaque is true.",
+    "capResultVar": "Variable to store the call's result in, if a later node needs it.",
+    "waitingMessage": "Said BEFORE the call on a voice channel — a connector round-trip is seconds of silence.",
+    "completionMessage": "Said after, and may reference what the call returned.",
+}
+
+#: The four kinds that take the fields above.
+CAPABILITY_NODE_KINDS: list[dict[str, Any]] = [
+    {"kind": "mail", "capability": "mail.send", "canonical_fields": ["to", "subject", "body"]},
+    {"kind": "sms", "capability": "sms.send", "canonical_fields": ["to", "body"]},
+    {
+        "kind": "calendar",
+        "capability": "calendar.create_event",
+        "canonical_fields": ["title", "start", "end", "attendees"],
+    },
+    {"kind": "crm", "capability": "crm.create_lead", "canonical_fields": ["name", "email", "phone", "company"]},
+]
 
 #: The order things must be done in. Stated as steps because a model reads this
 #: once and then acts; a prose paragraph invites it to start at step four.
@@ -186,6 +259,32 @@ async def shielva_flow_guide(tenant_context: TenantContext) -> dict[str, Any]:
             }
             for kind, cap in CAPABILITY_OF_KIND.items()
         ],
+        "calling_a_connector": {
+            "just_execute_it": {
+                "use": "a capability node (mail, sms, calendar, crm)",
+                "action_schema_needed": False,
+                "how": (
+                    "Enable the capability on the bot, then add the node with capConnector, "
+                    "capAction and capFields. Sending an email needs NO action schema."
+                ),
+                "node_fields": CAPABILITY_NODE_FIELDS,
+                "kinds": CAPABILITY_NODE_KINDS,
+                "canonical_fields_note": (
+                    "Use canonical names (to, subject, body) — never the vendor's parameter names. "
+                    "The connector maps them, which is what lets the provider be swapped without "
+                    "re-authoring the flow."
+                ),
+            },
+            "render_the_response": {
+                "use": "an action node pointing at an action schema, then a painter",
+                "action_schema_needed": True,
+                "how": (
+                    "Create the action schema first (shielva_create_action_schema): a static painter "
+                    "builds its card or table from that schema's RESPONSE SHAPE, so without it there "
+                    "is nothing to render from."
+                ),
+            },
+        },
         "note": (
             "Node kinds not in node_kinds are not recognised by the runtime. A flow containing one "
             "saves cleanly and that branch never executes."

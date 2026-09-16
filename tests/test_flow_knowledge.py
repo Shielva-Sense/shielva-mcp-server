@@ -72,3 +72,47 @@ def test_the_guide_tool_is_described_as_read_this_first():
     definition, _ = fk.FLOW_KNOWLEDGE_TOOL_DEFINITIONS[0]
     assert definition.description.startswith("READ THIS FIRST")
     assert "inert until" in definition.description
+
+
+def test_executing_an_api_does_not_require_an_action_schema():
+    """🚨 THE owner's rule, and the thing a model gets wrong by default: sending
+    an email needs NO action schema. A capability node names the connector and
+    action itself. Told otherwise, a model authors a schema nobody needed."""
+    guide = asyncio.run(fk.shielva_flow_guide(_t()))
+    execute = guide["calling_a_connector"]["just_execute_it"]
+    render = guide["calling_a_connector"]["render_the_response"]
+
+    assert execute["action_schema_needed"] is False
+    assert "NO action schema" in execute["how"]
+    assert render["action_schema_needed"] is True
+    # And the reason rendering differs: the painter builds from the RESPONSE SHAPE.
+    assert "RESPONSE SHAPE" in render["how"]
+
+
+def test_capability_nodes_are_listed_as_node_kinds_too():
+    """They were missing from the palette list, so a model reading node_kinds
+    would never learn `mail` exists and would reach for action + schema."""
+    kinds = {n["kind"] for n in fk.NODE_KINDS}
+    assert {"mail", "sms", "calendar", "crm"} <= kinds
+
+
+def test_the_canonical_field_names_are_spelled_out():
+    """🚨 Vendor names sent straight through reach the provider with parameters
+    it has never heard of — a 400 that reads like a credentials problem. The
+    canonical→vendor map is why these nodes exist at all."""
+    guide = asyncio.run(fk.shielva_flow_guide(_t()))
+    execute = guide["calling_a_connector"]["just_execute_it"]
+    assert "canonical" in execute["canonical_fields_note"].lower()
+
+    by_kind = {k["kind"]: k for k in execute["kinds"]}
+    assert by_kind["mail"]["canonical_fields"] == ["to", "subject", "body"]
+    assert by_kind["sms"]["canonical_fields"] == ["to", "body"]
+    assert "capConnector" in execute["node_fields"]
+    assert "capFields" in execute["node_fields"]
+
+
+def test_the_capability_kinds_and_the_node_list_cannot_disagree():
+    """Two tables naming the same four things is two chances to drift."""
+    guide = asyncio.run(fk.shielva_flow_guide(_t()))
+    from_kinds = {k["kind"] for k in guide["calling_a_connector"]["just_execute_it"]["kinds"]}
+    assert from_kinds == set(fk.CAPABILITY_OF_KIND)
