@@ -202,6 +202,12 @@ async def lifespan(app: FastAPI):
 
     register_bot_config_tools(tool_registry)
 
+    # Create / test / deploy / ground — without these the configuration tools
+    # had no bot to configure and no way to check the result.
+    from src.tools.lifecycle_tools import register_lifecycle_tools
+
+    register_lifecycle_tools(tool_registry)
+
     from src.tools.flow_knowledge import register_flow_knowledge_tools
 
     register_flow_knowledge_tools(tool_registry)

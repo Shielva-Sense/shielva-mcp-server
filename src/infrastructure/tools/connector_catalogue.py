@@ -202,6 +202,27 @@ class ConnectorToolCatalogue(ToolCatalogue, ToolExecutor):
             return set()
         return {str(row.get("connector_type")) for row in rows if isinstance(row, dict) and row.get("connector_type")}
 
+    async def providers_for(self, capability: str, tenant: TenantContext) -> list[tuple[str, str]]:
+        """``(connector_type, action)`` for every INSTALLED connector that declares
+        ``capability`` in its ``capability_actions``, in a stable order.
+
+        What lets "enable CRM on this bot" pick a real provider instead of
+        needing the caller to already know the vendor's type name and action.
+        Installed-set first, so a connector the tenant does not have is never
+        offered — same authorisation fact ``list_for`` rests on.
+        """
+        installed = await self._installed(tenant)
+        if not installed:
+            return []
+        types = await self._types()
+        out: list[tuple[str, str]] = []
+        for ctype in sorted(installed):
+            for row in (types.get(ctype) or {}).get(ACTIONS_KEY) or []:
+                if isinstance(row, dict) and row.get("capability") == capability and row.get("action"):
+                    out.append((ctype, str(row["action"])))
+                    break
+        return out
+
     # ── ToolCatalogue ─────────────────────────────────────────────
 
     async def list_for(self, tenant: TenantContext) -> list[Tool]:

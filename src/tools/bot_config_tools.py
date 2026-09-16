@@ -258,23 +258,96 @@ async def shielva_set_bot_variables(
     return {"status": "updated", "bot_id": bot_id, "field": "variables"}
 
 
+_catalogue: Any = None
+
+
+def _connector_catalogue() -> Any:
+    """One catalogue per process, so its connector-type cache is shared."""
+    global _catalogue
+    if _catalogue is None:
+        from config.settings import get_settings
+        from src.infrastructure.tools.connector_catalogue import ConnectorToolCatalogue
+
+        settings = get_settings()
+        _catalogue = ConnectorToolCatalogue(
+            base_url=(getattr(settings, "connector_gateway_url", "") or "").strip(),
+            timeout_s=float(getattr(settings, "connector_timeout_seconds", 30) or 30),
+        )
+    return _catalogue
+
+
 async def shielva_set_bot_capability(
-    tenant_context: TenantContext, bot_id: str, capability: str, enabled: bool
+    tenant_context: TenantContext,
+    bot_id: str,
+    capability: str,
+    enabled: bool,
+    connector: str | None = None,
+    action: str | None = None,
 ) -> dict[str, Any]:
-    """Turn one of a bot's capabilities on or off."""
+    """Turn one of a bot's capabilities on or off.
+
+    🚨 THIS USED TO DISABLE THE CAPABILITY WHEN ASKED TO ENABLE IT.
+
+    It sent ``{"enabled": true}``. The endpoint never reads ``enabled`` — it
+    stores a PROVIDER CHOICE from ``connector`` and ``action``, and an empty
+    connector means "clear it" (``bot_capabilities.set_one`` pops the row). So
+    every call removed the capability, the call reported ``updated``, and every
+    sms/mail/calendar/crm node on that bot saved cleanly and did nothing at
+    runtime. The exact silent-inert failure the flow guide warns about, caused
+    by the tool the guide tells you to use.
+
+    Enabling now means choosing a provider. Name one with ``connector`` (and
+    ``action``), or omit them and the tool picks the connector this workspace
+    has INSTALLED that declares the capability. The stored row is read back and
+    returned, so the answer is what the platform holds, not what was hoped.
+    """
     if not bot_id or not capability:
         return _fail("bot_id and capability are required")
+
+    chosen_connector, chosen_action, alternatives = "", "", []
+    if enabled:
+        if connector:
+            chosen_connector, chosen_action = connector.strip(), (action or "").strip()
+        else:
+            providers = await _connector_catalogue().providers_for(capability, tenant_context)
+            if not providers:
+                return _fail(
+                    f"No installed connector in this workspace declares {capability!r}. "
+                    "Install one that does (Connectors), then enable it again.",
+                    bot_id=bot_id,
+                    capability=capability,
+                )
+            (chosen_connector, chosen_action), alternatives = providers[0], providers[1:]
+
     try:
-        await _call(
+        written = await _call(
             "PUT",
             f"/bots/{bot_id}/capabilities/{capability}",
             tenant_context,
             params=_LIVE,
-            json={"enabled": bool(enabled)},
+            json={"connector": chosen_connector, "action": chosen_action},
         )
     except ToolCallError as exc:
         return _fail(str(exc), bot_id=bot_id)
-    return {"status": "updated", "bot_id": bot_id, "capability": capability, "enabled": bool(enabled)}
+
+    stored = (written.get("capabilities") or {}) if isinstance(written, dict) else {}
+    row = stored.get(capability)
+    if bool(enabled) != bool(row):
+        return _fail(
+            f"The write returned but {capability!r} is {'still absent' if enabled else 'still present'}.",
+            bot_id=bot_id,
+            stored=stored,
+        )
+    out: dict[str, Any] = {
+        "status": "updated",
+        "bot_id": bot_id,
+        "capability": capability,
+        "enabled": bool(row),
+        "provider": row or None,
+    }
+    if alternatives:
+        out["other_installed_providers"] = [{"connector": c, "action": a} for c, a in alternatives]
+    return out
 
 
 async def shielva_set_bot_memory_policy(
@@ -571,11 +644,23 @@ BOT_CONFIG_TOOL_DEFINITIONS: list[tuple[ToolDefinition, Any]] = [
     ),
     _tool(
         "shielva_set_bot_capability",
-        "Turn one of a bot's capabilities on or off.",
+        "Turn one of a bot's capabilities on or off. Enabling picks the installed connector that provides it unless you name one; the stored provider is returned.",
         [
             _P_BOT,
             {"name": "capability", "type": "string", "description": "Capability key", "required": True},
             {"name": "enabled", "type": "boolean", "description": "On or off", "required": True},
+            {
+                "name": "connector",
+                "type": "string",
+                "description": "Connector TYPE to use, e.g. google_calendar. Omit to use the installed one that declares this capability.",
+                "required": False,
+            },
+            {
+                "name": "action",
+                "type": "string",
+                "description": "The connector's action, e.g. create_event. Omit when omitting connector.",
+                "required": False,
+            },
         ],
         shielva_set_bot_capability,
     ),
