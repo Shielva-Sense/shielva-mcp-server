@@ -47,6 +47,8 @@ class _Catalogue:
 
 def _stores_what_it_is_sent(capability):
     def reply(body):
+        if "connector" not in (body or {}):
+            return {"ok": True}  # the per-bot connector link that follows an enable
         row = {"connector": body["connector"], "action": body["action"]} if body["connector"] else None
         return {"bot_id": "b1", "capabilities": ({capability: row} if row else {})}
 
@@ -64,7 +66,7 @@ def test_enabling_sends_a_provider_not_an_enabled_flag(monkeypatch):
 
     out = asyncio.run(cfg.shielva_set_bot_capability(_t(), "b1", "crm.create_lead", True))
 
-    body = rec.calls[0]["json"]
+    body = next(c["json"] for c in rec.calls if "/capabilities/" in c["path"])
     assert "enabled" not in body, "the endpoint ignores `enabled` — sending only it cleared the row"
     assert body == {"connector": "shielva_sales", "action": "create_lead"}
     assert out["status"] == "updated"
@@ -83,7 +85,10 @@ def test_a_named_connector_is_used_without_consulting_the_catalogue(monkeypatch)
             _t(), "b1", "calendar.create_event", True, connector="google_calendar", action="create_event"
         )
     )
-    assert rec.calls[0]["json"] == {"connector": "google_calendar", "action": "create_event"}
+    assert next(c["json"] for c in rec.calls if "/capabilities/" in c["path"]) == {
+        "connector": "google_calendar",
+        "action": "create_event",
+    }
     assert cat.asked == []
     assert out["provider"]["connector"] == "google_calendar"
 
@@ -212,3 +217,60 @@ def test_lifecycle_tools_are_registered_and_visible():
     for d, _ in LIFECYCLE_TOOL_DEFINITIONS:
         assert d.requires_permissions == [], f"{d.name} would be hidden from tools/list"
         assert d.enabled_by_default is False, f"{d.name} must never be in a live bot's runtime toolset"
+
+
+def test_enabling_a_capability_also_enables_its_connector_for_the_bot(monkeypatch):
+    """🚨 Without this the bot is refused on every call: the runtime gates on the
+    bot's enabled-connector list, which the capability binding does not touch."""
+    calls: list[tuple[str, str, Any]] = []
+
+    async def gw(method, path, tenant_context, *, params=None, json=None):
+        calls.append((method, path, json))
+        if path.endswith("/capabilities/calendar.create_event"):
+            return {
+                "capabilities": {"calendar.create_event": {"connector": json["connector"], "action": json["action"]}}
+            }
+        return {"ok": True}
+
+    monkeypatch.setattr(cfg, "_call", gw)
+    monkeypatch.setattr(cfg, "_connector_catalogue", lambda: _Catalogue([("google_calendar", "create_event")]))
+    out = asyncio.run(cfg.shielva_set_bot_capability(_t(), "b1", "calendar.create_event", True))
+
+    link = [c for c in calls if c[1] == "/bots/b1/api-connectors"]
+    assert link, "the connector was never enabled for the bot"
+    assert link[0][2] == {"connector_id": "google_calendar", "enabled": True, "action": "link"}
+    assert out["connector_enabled_for_bot"] is True
+
+
+def test_disabling_a_capability_does_not_unlink_the_connector(monkeypatch):
+    calls: list[str] = []
+
+    async def gw(method, path, tenant_context, *, params=None, json=None):
+        calls.append(path)
+        return {"capabilities": {}}
+
+    monkeypatch.setattr(cfg, "_call", gw)
+    asyncio.run(cfg.shielva_set_bot_capability(_t(), "b1", "mail.send", False))
+    assert "/bots/b1/api-connectors" not in calls
+
+
+def test_add_flow_node_can_wire_a_branch_output(monkeypatch):
+    from src.tools import flow_tools
+
+    saved: dict[str, Any] = {}
+
+    async def gw(method, path, tenant_context, *, params=None, json=None):
+        if method == "GET":
+            return {"nodes": [{"id": "route", "data": {"kind": "classify"}}], "edges": []}
+        saved.update(json or {})
+        return {"ok": True}
+
+    monkeypatch.setattr(flow_tools, "_call", gw)
+    asyncio.run(
+        flow_tools.shielva_add_flow_node(
+            _t(), "b1", {"id": "ask_name", "data": {"kind": "ask"}}, edge_from="route", edge_handle="c_buy"
+        )
+    )
+    edge = saved["edges"][-1]
+    assert edge["source"] == "route"
+    assert edge["sourceHandle"] == "c_buy", "a classify case routes only down its own handle"

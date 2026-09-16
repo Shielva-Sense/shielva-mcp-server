@@ -441,12 +441,39 @@ async def shielva_set_bot_capability(
             bot_id=bot_id,
             stored=stored,
         )
+    # 🚨 Choosing a provider must also LET THE BOT CALL IT.
+    #
+    # The runtime gates every connector call on the bot's own enabled-connector
+    # list (POST /bots/{id}/api-connectors) — a security boundary separate from
+    # the capability binding. Nothing in this toolset set it, so a bot built over
+    # MCP had its capability chosen and was still refused on every call with
+    # "connector is not enabled for this bot": configured, and inert. Choosing
+    # google_calendar for calendar.create_event IS the decision to let this bot
+    # call google_calendar, so the link is made here. Disabling a capability does
+    # NOT unlink — the same connector may still serve this bot's action nodes.
+    linked = False
+    if enabled and row:
+        try:
+            await _call(
+                "POST",
+                f"/bots/{bot_id}/api-connectors",
+                tenant_context,
+                json={"connector_id": row.get("connector") or chosen_connector, "enabled": True, "action": "link"},
+            )
+            linked = True
+        except ToolCallError as exc:
+            return _fail(
+                f"{capability!r} now uses {row.get('connector')}, but enabling that connector for the bot failed: {exc}. "
+                "Until it is enabled the bot will be refused when it calls it.",
+                bot_id=bot_id,
+            )
     out: dict[str, Any] = {
         "status": "updated",
         "bot_id": bot_id,
         "capability": capability,
         "enabled": bool(row),
         "provider": row or None,
+        "connector_enabled_for_bot": linked,
     }
     if alternatives:
         out["other_installed_providers"] = [{"connector": c, "action": a} for c, a in alternatives]

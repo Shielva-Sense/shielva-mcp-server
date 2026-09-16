@@ -125,6 +125,7 @@ async def shielva_add_flow_node(
     node: dict[str, Any],
     edge_from: str | None = None,
     expected_node_count: int | None = None,
+    edge_handle: str | None = None,
 ) -> dict[str, Any]:
     """Append ONE node to a bot's flow, optionally joined from an existing node.
 
@@ -162,7 +163,19 @@ async def shielva_add_flow_node(
     if edge_from:
         if not any(isinstance(n, dict) and n.get("id") == edge_from for n in nodes):
             return _fail(f"edge_from names a node that is not in the flow: {edge_from!r}", bot_id=bot_id)
-        edges.append({"id": f"{edge_from}->{node['id']}", "source": edge_from, "target": node["id"]})
+        # 🚨 A branch needs its OUTPUT named. A classify node routes each case down
+        # the edge whose sourceHandle is that case's id; a condition by its branch
+        # id; an ask by "fallback". Without the handle every edge here was an
+        # unlabelled "next", so a flow built node-by-node could draw a straight
+        # line and could not branch at all.
+        new_edge = {
+            "id": f"{edge_from}-{edge_handle}->{node['id']}" if edge_handle else f"{edge_from}->{node['id']}",
+            "source": edge_from,
+            "target": node["id"],
+        }
+        if edge_handle:
+            new_edge["sourceHandle"] = edge_handle
+        edges.append(new_edge)
 
     try:
         await _call(
@@ -260,6 +273,12 @@ FLOW_TOOL_DEFINITIONS: list[tuple[ToolDefinition, Any]] = [
                     "name": "expected_node_count",
                     "type": "integer",
                     "description": "How many nodes you last saw. Refuses the write if it changed.",
+                    "required": False,
+                },
+                {
+                    "name": "edge_handle",
+                    "type": "string",
+                    "description": 'Which OUTPUT of edge_from to join from: a classify case id, a condition branch id, or "fallback" on an ask. Omit for a plain next edge.',
                     "required": False,
                 },
             ],
