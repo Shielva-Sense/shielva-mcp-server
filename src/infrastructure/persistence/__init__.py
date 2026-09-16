@@ -13,11 +13,13 @@ from .mongo_user_config_repository import (
     MongoUserConfigRepository,
     get_user_config_repo,
 )
+from .redis_chat_session_repository import RedisChatSessionRepository
 
 __all__ = [
     "InMemoryChatSessionRepository",
     "LegacyBotRepositoryAdapter",
     "LegacyKBRepositoryAdapter",
     "MongoUserConfigRepository",
+    "RedisChatSessionRepository",
     "get_user_config_repo",
 ]

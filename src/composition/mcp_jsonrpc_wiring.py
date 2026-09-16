@@ -26,7 +26,11 @@ import uuid
 from fastapi import APIRouter
 
 from src.application.chat import ChatApplicationService
-from src.infrastructure.persistence import InMemoryChatSessionRepository
+from src.domain.chat.repositories import ChatSessionRepository
+from src.infrastructure.persistence import (
+    InMemoryChatSessionRepository,
+    RedisChatSessionRepository,
+)
 from src.interface.mcp_jsonrpc.dispatcher import (
     PROTOCOL_VERSION,
     MCPDispatcher,
@@ -34,9 +38,36 @@ from src.interface.mcp_jsonrpc.dispatcher import (
 from src.interface.mcp_jsonrpc.transport import build_router
 
 # Process-wide singletons. Tests construct their own instances.
-_chat_repository: InMemoryChatSessionRepository | None = None
+_chat_repository: ChatSessionRepository | None = None
 _chat_service: ChatApplicationService | None = None
 _dispatcher: MCPDispatcher | None = None
+
+
+def _make_session_repository() -> ChatSessionRepository:
+    """Redis whenever it is configured; in-process only for local dev.
+
+    🚨 The in-memory store is per PROCESS. The container runs
+    ``uvicorn --workers 4``, so with it ``initialize`` created a session in one
+    worker and the next request hit another that had never seen it — about
+    three MCP calls in four failed with "requires a completed initialize
+    handshake" / "Session terminated". A shared store is not an HA nicety here;
+    it is what makes a single multi-worker pod work at all.
+
+    Deliberately no silent fallback when REDIS_URL IS set but unreachable:
+    degrading to per-worker memory would quietly reinstate exactly that bug.
+    """
+    from config.settings import get_settings
+
+    settings = get_settings()
+    url = settings.redis_url.get_secret_value() if settings.redis_url else ""
+    if not url:
+        return InMemoryChatSessionRepository()
+
+    import redis.asyncio as redis_asyncio
+
+    client = redis_asyncio.from_url(url, db=settings.redis_db, decode_responses=True)
+    ttl = int(os.getenv("MCP_SESSION_TTL_SECONDS", "3600"))
+    return RedisChatSessionRepository(client, ttl_seconds=ttl)
 
 
 def _make_session_id() -> str:
@@ -57,7 +88,7 @@ def build_mcp_jsonrpc_router() -> APIRouter:
     global _chat_repository, _chat_service, _dispatcher
 
     if _dispatcher is None:
-        _chat_repository = InMemoryChatSessionRepository()
+        _chat_repository = _make_session_repository()
         _chat_service = ChatApplicationService(
             repository=_chat_repository,
             session_id_factory=_make_session_id,
