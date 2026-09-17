@@ -274,3 +274,33 @@ def test_add_flow_node_can_wire_a_branch_output(monkeypatch):
     edge = saved["edges"][-1]
     assert edge["source"] == "route"
     assert edge["sourceHandle"] == "c_buy", "a classify case routes only down its own handle"
+
+
+# ── chat: the designer's studio session ─────────────────────────────
+
+
+def test_chat_opens_a_studio_session_and_carries_the_conversation(monkeypatch):
+    """🚨 /bots/{id}/chat 400s without a session token, and a token nobody
+    opened is refused unless the turn is a studio turn. The tool sent neither."""
+    rec = _Recorder({"response": "Hi, are you looking to rent or to buy?"})
+    monkeypatch.setattr(life, "_call", rec)
+
+    first = asyncio.run(life.shielva_chat_with_bot(_t(), "b1", "hi"))
+    body = rec.calls[0]["json"]
+    assert body["studio"] is True
+    assert body["token"]
+    assert "context" not in body
+    assert first["context"] == {"conversation_id": body["token"]}
+
+    asyncio.run(life.shielva_chat_with_bot(_t(), "b1", "renting", context=first["context"]))
+    assert rec.calls[1]["json"]["token"] == body["token"]
+    # the conversation id is ours, never forwarded as body context
+    assert "context" not in rec.calls[1]["json"]
+
+
+def test_each_new_chat_is_its_own_conversation(monkeypatch):
+    rec = _Recorder({"response": "ok"})
+    monkeypatch.setattr(life, "_call", rec)
+    asyncio.run(life.shielva_chat_with_bot(_t(), "b1", "hi"))
+    asyncio.run(life.shielva_chat_with_bot(_t(), "b1", "hi"))
+    assert rec.calls[0]["json"]["token"] != rec.calls[1]["json"]["token"]

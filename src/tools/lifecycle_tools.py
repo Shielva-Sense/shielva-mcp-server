@@ -20,11 +20,12 @@ Paths and bodies are read from the core-api handlers, not assumed:
 ``create_bot`` reads name/description/icon/status and returns ``bot_id``;
 ``create_knowledge_base`` takes name/description and returns ``kb_id``;
 ``ingest_url_to_kb`` reads url/crawl/max_pages; ``chat_with_bot`` reads
-message/context; ``set_bot_kb_groups`` takes ``kb_group_ids`` embedded.
+message/token/studio; ``set_bot_kb_groups`` takes ``kb_group_ids`` embedded.
 """
 
 from __future__ import annotations
 
+import uuid
 from typing import Any
 
 import structlog
@@ -73,14 +74,28 @@ async def shielva_chat_with_bot(
     """
     if not bot_id or not (message or "").strip():
         return _fail("bot_id and message are required")
-    body: dict[str, Any] = {"message": message}
-    if context:
-        body["context"] = context
+    # 🚨 /bots/{id}/chat refuses a turn with no session ``token`` (400 "message
+    # (or cta_event) and token required") — this tool sent none, so it never
+    # worked. ``studio: true`` is the designer's own test path: core-api opens
+    # the session on the first turn, bound to the CALLER's tenant and this bot,
+    # so a made-up token reaches nothing it could not already reach. The same
+    # token carries the conversation, so it rides back in ``context``.
+    ctx = dict(context or {})
+    conversation_id = str(ctx.pop("conversation_id", "") or "") or f"mcp-test-{uuid.uuid4().hex}"
+    body: dict[str, Any] = {"message": message, "token": conversation_id, "studio": True}
+    if ctx:
+        body["context"] = ctx
     try:
         data = await _call("POST", f"/bots/{bot_id}/chat", tenant_context, json=body)
     except ToolCallError as exc:
         return _fail(str(exc), bot_id=bot_id)
-    return {"status": "ok", "bot_id": bot_id, "response": data}
+    return {
+        "status": "ok",
+        "bot_id": bot_id,
+        "response": data,
+        # Pass this back as ``context`` to continue the same conversation.
+        "context": {"conversation_id": conversation_id},
+    }
 
 
 async def shielva_deploy_bot(tenant_context: TenantContext, bot_id: str) -> dict[str, Any]:
