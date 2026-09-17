@@ -25,6 +25,7 @@ message/token/studio; ``set_bot_kb_groups`` takes ``kb_group_ids`` embedded.
 
 from __future__ import annotations
 
+import os
 import uuid
 from typing import Any
 
@@ -164,6 +165,63 @@ async def shielva_set_bot_knowledge_groups(
 _P_BOT = {"name": "bot_id", "type": "string", "description": "The bot's id", "required": True}
 
 
+async def shielva_create_demo(
+    tenant_context: TenantContext,
+    bot_id: str,
+    audience: str = "ceo",
+    narration_language: str = "en",
+    enquiries_per_month: int | None = None,
+    minutes_per_enquiry: float | None = None,
+    out_of_hours_percent: float | None = None,
+    their_enquiry: str = "",
+) -> dict[str, Any]:
+    """Build a bot's product-demo script and return where to watch and download it.
+
+    core-api builds it from the bot's own flow and intents, runs a sample
+    conversation through the real flow with nothing sent, and has the workspace's
+    model write the narration — dropping any line that states a number the facts
+    do not contain. The video plays and downloads as MP4 in Demo Studio; this
+    returns the script's spoken lines and the studio link.
+    """
+    if not bot_id:
+        return _fail("bot_id is required")
+    brief: dict[str, Any] = {
+        "audience": audience or "ceo",
+        "narration_language": narration_language or "en",
+        "enquiries_per_month": enquiries_per_month,
+        "minutes_per_enquiry": minutes_per_enquiry,
+        "out_of_hours_percent": out_of_hours_percent,
+        "their_enquiry": their_enquiry or "",
+    }
+    try:
+        data = await _call("POST", f"/bots/{bot_id}/demo/script", tenant_context, json=brief)
+    except ToolCallError as exc:
+        return _fail(str(exc), bot_id=bot_id)
+    script = (data or {}).get("script") or {}
+    acts = [
+        {
+            "act": act.get("kind"),
+            "narration": [line.get("text") for line in act.get("lines") or []],
+            "dropped": act.get("flagged") or [],
+        }
+        for act in script.get("acts") or []
+    ]
+    run = next((a for a in script.get("acts") or [] if a.get("kind") == "run"), {})
+    # 🚨 From configuration, never a literal: the same server runs against more than
+    # one deployment, and a wrong link is worse than a relative one.
+    base = os.getenv("ARC_PUBLIC_URL", "").rstrip("/")
+    studio = f"{base}/flow/demo?bot={bot_id}"
+    return {
+        "status": "created",
+        "bot_id": bot_id,
+        "bot_name": script.get("bot_name"),
+        "acts": acts,
+        "sample_conversation_beats": len(run.get("turns") or []),
+        "studio_url": studio,
+        "next": "Open studio_url to watch the demo, edit any line, and press Download MP4.",
+    }
+
+
 def _tool(name: str, description: str, params: list[dict[str, Any]], handler: Any):
     """Same two flags as the other product tool modules: visible in tools/list
     (the gateway's grant map decides reach), and never in a live bot's runtime
@@ -231,6 +289,47 @@ LIFECYCLE_TOOL_DEFINITIONS: list[tuple[ToolDefinition, Any]] = [
             {"name": "max_pages", "type": "integer", "description": "Page cap when crawling", "required": False},
         ],
         shielva_ingest_url,
+    ),
+    _tool(
+        "shielva_create_demo",
+        "Make a product demo of a bot: a narrated video script (the problem, what it handles, the flow being "
+        "built, a sample conversation run through the real flow with nothing sent, what changes, close). "
+        "Returns the narration and the Demo Studio link where it plays and downloads as MP4.",
+        [
+            _P_BOT,
+            {"name": "audience", "type": "string", "description": "ceo, operations or sales", "required": False},
+            {
+                "name": "narration_language",
+                "type": "string",
+                "description": "Language code, e.g. en, de, ar",
+                "required": False,
+            },
+            {
+                "name": "enquiries_per_month",
+                "type": "integer",
+                "description": "The business's own number; used for what changes",
+                "required": False,
+            },
+            {
+                "name": "minutes_per_enquiry",
+                "type": "number",
+                "description": "Minutes each enquiry takes by hand",
+                "required": False,
+            },
+            {
+                "name": "out_of_hours_percent",
+                "type": "number",
+                "description": "Share of enquiries out of hours, 0-100",
+                "required": False,
+            },
+            {
+                "name": "their_enquiry",
+                "type": "string",
+                "description": "A real message from the prospect to start the sample conversation from",
+                "required": False,
+            },
+        ],
+        shielva_create_demo,
     ),
     _tool(
         "shielva_set_bot_knowledge_groups",

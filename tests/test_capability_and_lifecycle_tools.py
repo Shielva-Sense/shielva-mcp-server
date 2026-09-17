@@ -304,3 +304,41 @@ def test_each_new_chat_is_its_own_conversation(monkeypatch):
     asyncio.run(life.shielva_chat_with_bot(_t(), "b1", "hi"))
     asyncio.run(life.shielva_chat_with_bot(_t(), "b1", "hi"))
     assert rec.calls[0]["json"]["token"] != rec.calls[1]["json"]["token"]
+
+
+# ── demo ───────────────────────────────────────────────────────────
+
+
+def test_create_demo_posts_the_brief_and_returns_the_studio_link(monkeypatch):
+    script = {
+        "bot_name": "London Estates",
+        "acts": [
+            {"kind": "problem", "lines": [{"text": "Enquiries arrive after hours."}], "flagged": []},
+            {"kind": "run", "lines": [], "turns": [{"who": "caller"}, {"who": "bot"}], "flagged": []},
+            {"kind": "impact", "lines": [], "flagged": ["Dropped \u201c80% faster\u201d"]},
+        ],
+    }
+    rec = _Recorder({"script": script})
+    monkeypatch.setattr(life, "_call", rec)
+    monkeypatch.setenv("ARC_PUBLIC_URL", "https://arc.example.test/")
+
+    out = asyncio.run(life.shielva_create_demo(_t(), "b1", enquiries_per_month=450, minutes_per_enquiry=5))
+
+    call = rec.calls[0]
+    assert call["method"] == "POST"
+    assert call["path"] == "/bots/b1/demo/script"
+    assert call["json"]["enquiries_per_month"] == 450
+    assert call["json"]["audience"] == "ceo"
+    assert out["studio_url"] == "https://arc.example.test/flow/demo?bot=b1"
+    assert out["acts"][0]["narration"] == ["Enquiries arrive after hours."]
+    assert out["acts"][2]["dropped"]
+    assert out["sample_conversation_beats"] == 2
+
+
+def test_create_demo_needs_a_bot():
+    assert asyncio.run(life.shielva_create_demo(_t(), ""))["status"] == "failed"
+
+
+def test_create_demo_is_registered():
+    names = {d.name for d, _ in life.LIFECYCLE_TOOL_DEFINITIONS}
+    assert "shielva_create_demo" in names
