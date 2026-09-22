@@ -126,6 +126,13 @@ class LLMCompleteResponse(BaseModel):
     tool_calls: list[dict[str, Any]] | None = None
     model: str = ""
     tokens_used: int = 0
+    # 🚨 The SPLIT, not just the total. Providers price read and written tokens
+    # differently — often by an order of magnitude — so a caller holding only a
+    # total can do no better than a blended rate. core-api's per-bot analytics
+    # priced every flow turn at $0.000 because nothing downstream ever received
+    # these two numbers, and `LLMUsage` has carried them the whole time.
+    input_tokens: int = 0
+    output_tokens: int = 0
     finish_reason: str = ""
 
 
@@ -223,6 +230,8 @@ async def llm_complete(
         tool_calls=tool_calls_out,
         model=str(response.model),
         tokens_used=response.usage.total_tokens,
+        input_tokens=response.usage.prompt_tokens,
+        output_tokens=response.usage.completion_tokens,
         finish_reason=response.finish_reason.value,
     )
 
