@@ -82,6 +82,11 @@ class ToolLoopOutput:
     model: ModelId
     finish_reason: FinishReason
     tokens_used: int
+    # The same total, split the way providers actually price it. Summed across
+    # every iteration, exactly like `tokens_used`, so a loop that ran five turns
+    # reports what all five read and wrote rather than only the last.
+    input_tokens: int
+    output_tokens: int
     iterations: int
     truncated: bool  # True when we hit max_iterations
 
@@ -116,6 +121,8 @@ class CompleteWithToolLoopUseCase:
         last_model = ModelId("")
         last_finish = FinishReason.OTHER
         total_tokens = 0
+        input_tokens = 0
+        output_tokens = 0
         iteration = 0
 
         logger.info(
@@ -135,6 +142,8 @@ class CompleteWithToolLoopUseCase:
             last_model = response.model
             last_finish = response.finish_reason
             total_tokens += response.usage.total_tokens
+            input_tokens += response.usage.prompt_tokens
+            output_tokens += response.usage.completion_tokens
 
             if not response.tool_calls:
                 # Plain text answer — we're done.
@@ -152,6 +161,8 @@ class CompleteWithToolLoopUseCase:
                     model=response.model,
                     finish_reason=response.finish_reason,
                     tokens_used=total_tokens,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
                     iterations=iteration,
                     truncated=False,
                 )
@@ -181,12 +192,16 @@ class CompleteWithToolLoopUseCase:
             use_tools=False,
         )
         total_tokens += final.usage.total_tokens
+        input_tokens += final.usage.prompt_tokens
+        output_tokens += final.usage.completion_tokens
         return ToolLoopOutput(
             answer=final.content or "I wasn't able to complete that request.",
             executed=tuple(executed),
             model=final.model or last_model,
             finish_reason=final.finish_reason or last_finish,
             tokens_used=total_tokens,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
             iterations=iteration,
             truncated=True,
         )

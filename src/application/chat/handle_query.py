@@ -65,6 +65,8 @@ class HandleQueryOutput:
     sources: list[dict[str, Any]]
     tool_calls: list[dict[str, Any]]
     tokens_used: int
+    input_tokens: int
+    output_tokens: int
     latency_ms: int
     model: str
     session_id: str
@@ -391,6 +393,8 @@ class HandleQueryUseCase:
             sources=sources,
             tool_calls=tool_calls,
             tokens_used=int(result.tokens_used or 0),
+            input_tokens=int(getattr(result, "input_tokens", 0) or 0),
+            output_tokens=int(getattr(result, "output_tokens", 0) or 0),
             latency_ms=duration_ms,
             model=str(result.model or ""),
             session_id=str(session.session_id or ""),

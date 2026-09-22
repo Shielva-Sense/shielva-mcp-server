@@ -146,6 +146,11 @@ class MCPQueryResponse(BaseModel):
     sources: list[Source] = []
     tool_calls: list[ToolCall] = []
     tokens_used: int = 0
+    # The same total, split the way providers price it. Without these the caller
+    # can only apply a blended rate, which is how core-api priced every flow
+    # turn at $0.000.
+    input_tokens: int = 0
+    output_tokens: int = 0
     latency_ms: int = 0
     model: str = ""
     session_id: str = ""

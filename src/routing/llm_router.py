@@ -53,6 +53,11 @@ class LLMResponse:
     tool_calls: list[ToolCall] = field(default_factory=list)
     sources: list[Source] = field(default_factory=list)
     tokens_used: int = 0
+    # The same total, split the way providers price it. Read and written tokens
+    # can differ by an order of magnitude in cost, so a caller holding only a
+    # total can do no better than a blended rate.
+    input_tokens: int = 0
+    output_tokens: int = 0
     model: str = ""
     finish_reason: str = ""
 
@@ -267,6 +272,15 @@ class LLMRouter:
         all_tool_calls = []
         current_messages = messages.copy()
         extra = {"api_base": api_base} if api_base else {}
+        # 🚨 Summed over the loop, for the reason the metering note below
+        # already gives: a tool-using bot spends a full completion each time
+        # round. `tokens_used` was set from the LAST response only, so the
+        # number this router RETURNS under-reported every turn that used a
+        # tool — the exact mistake that comment was written about, made one
+        # line further down.
+        spent_total = 0
+        spent_input = 0
+        spent_output = 0
 
         # Tool calling loop
         max_iterations = 5
@@ -297,6 +311,9 @@ class LLMRouter:
             # them.
             usage = getattr(response, "usage", None)
             if usage is not None:
+                spent_total += getattr(usage, "total_tokens", 0) or 0
+                spent_input += getattr(usage, "prompt_tokens", 0) or 0
+                spent_output += getattr(usage, "completion_tokens", 0) or 0
                 report_llm_usage(
                     tenant_id=getattr(tenant_context, "tenant_id", None),
                     prompt_tokens=getattr(usage, "prompt_tokens", 0) or 0,
@@ -351,7 +368,9 @@ class LLMRouter:
                     answer=message.content or "",
                     tool_calls=all_tool_calls,
                     sources=[],  # Sources would come from RAG
-                    tokens_used=response.usage.total_tokens if response.usage else 0,
+                    tokens_used=spent_total,
+                    input_tokens=spent_input,
+                    output_tokens=spent_output,
                     model=model,
                     finish_reason=finish_reason,
                 )
@@ -361,7 +380,12 @@ class LLMRouter:
         return LLMResponse(
             answer="I apologize, but I'm having trouble completing this request.",
             tool_calls=all_tool_calls,
-            tokens_used=0,
+            # Hitting the iteration cap is the MOST expensive outcome there is —
+            # five full completions and no answer. Reporting 0 made the turns
+            # that cost the most look free.
+            tokens_used=spent_total,
+            input_tokens=spent_input,
+            output_tokens=spent_output,
             model=model,
             finish_reason="max_iterations",
         )

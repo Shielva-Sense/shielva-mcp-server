@@ -87,6 +87,8 @@ async def process_query(
         sources=[Source(**s) for s in out.sources],
         tool_calls=[ToolCall(**t) for t in out.tool_calls],
         tokens_used=out.tokens_used,
+        input_tokens=out.input_tokens,
+        output_tokens=out.output_tokens,
         latency_ms=out.latency_ms,
         model=out.model,
         session_id=out.session_id,
