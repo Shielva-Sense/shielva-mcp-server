@@ -8,12 +8,50 @@ from dataclasses import dataclass, field
 import asyncio
 import structlog
 import vecs
+from sqlalchemy.exc import ProgrammingError
 from vecs.collection import Collection
 
 logger = structlog.get_logger(__name__)
 
+#: A pooled connection older than this is replaced before it is handed out.
+_POOL_RECYCLE_S = 300
+#: TCP keepalives, so an idle pooled connection is not silently dropped by
+#: connection tracking between pods and the database.
+_KEEPALIVES = {"keepalives": 1, "keepalives_idle": 30, "keepalives_interval": 10, "keepalives_count": 3}
+
+
+class VectorStoreUnavailable(RuntimeError):
+    """The vector database could not be queried — NOT "no matching documents".
+
+    🚨 The two used to look identical: a search that failed returned an empty
+    list, the answer step read "no relevant knowledge", and the model supplied
+    a price of its own. A caller must be able to tell them apart.
+    """
+
 
 from .models import VectorDocument, SearchResult
+
+
+def _with_live_pool(client: Any, db_url: str) -> None:
+    """Give a vecs client a pool that checks a connection before handing it out.
+
+    🚨 vecs builds a bare ``create_engine(url)``: no pre-ping, no recycle. After
+    four days up, the mcp pod's pooled connections had been dropped underneath
+    it and every search failed with "could not send data to server: Connection
+    timed out" until the pod was restarted. ``pool_pre_ping`` replaces a dead
+    connection transparently; keepalives stop idle ones being dropped at all.
+
+    vecs reads its engine and session factory only through the client's public
+    ``engine`` and ``Session`` attributes, so both are replaced together.
+    """
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    client.engine.dispose()
+    client.engine = create_engine(
+        db_url, pool_pre_ping=True, pool_recycle=_POOL_RECYCLE_S, connect_args=dict(_KEEPALIVES)
+    )
+    client.Session = sessionmaker(client.engine)
 
 
 class PgVectorStore:
@@ -52,7 +90,9 @@ class PgVectorStore:
         """Establish connection to pgvector (via vecs)."""
         # vecs.create_client is synchronous but lightweight (connection pool)
         try:
-            self._client = vecs.create_client(self.db_url)
+            client = vecs.create_client(self.db_url)
+            _with_live_pool(client, self.db_url)
+            self._client = client
             logger.info("Connected to pgvector")
         except Exception as e:
             logger.error("Failed to connect to pgvector", error=str(e))
@@ -229,6 +269,7 @@ class PgVectorStore:
                     ))
             except Exception as e:
                 logger.error("Search failed", collection=collection_name, error=str(e))
+                raise VectorStoreUnavailable(f"vector search failed on {collection_name}") from e
             return out
 
         # One thread per KB, all concurrent and off the event loop.
@@ -320,9 +361,13 @@ class PgVectorStore:
                                 if k not in ["content", "tenant_id", "kb_id"]
                             },
                         ))
-            except Exception as e:
-                # Table might not exist or other error
+            except ProgrammingError as e:
+                # No table or no FTS index for this KB yet — nothing to find, not a fault.
                 logger.warning("Keyword search failed (maybe no index/table?)", collection=collection_name, error=str(e))
+            except Exception as e:
+                # 🚨 A connection that died is not "no keyword matches".
+                logger.error("Keyword search failed", collection=collection_name, error=str(e))
+                raise VectorStoreUnavailable(f"keyword search failed on {collection_name}") from e
             return out
 
         # One thread per KB, all concurrent and off the event loop.

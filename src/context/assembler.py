@@ -197,6 +197,23 @@ _LANGUAGE_RULE = """
 another language. If the instructions above say how to write that language (a dialect, a tone), follow them."""
 
 
+class KnowledgeUnavailable(RuntimeError):
+    """The knowledge base could not be searched — distinct from "nothing matched"."""
+
+
+#: The knowledge the model gets when the search found nothing relevant.
+NO_RELEVANT_KNOWLEDGE = (
+    "No relevant knowledge found. Do not state prices, figures, dates, addresses or other facts about the "
+    "business that are not given here; say the team will confirm."
+)
+#: …and when the search could not run at all.
+KNOWLEDGE_UNAVAILABLE = (
+    "<knowledge_base_unavailable>The business's knowledge could not be read just now. Do NOT state any price, "
+    "figure, date, address or other fact about the business. Say the team will confirm it, and offer to book or to "
+    "have someone get back to them if that fits.</knowledge_base_unavailable>"
+)
+
+
 class ContextAssembler:
     """
     Assembles context for LLM queries.
@@ -269,12 +286,17 @@ class ContextAssembler:
         )
 
         # 3. Retrieve knowledge
-        retrieved_chunks = await self._retrieve_knowledge(
-            query=query, bot_config=bot_config, tenant_context=tenant_context
-        )
-
         # 4. Build context string from retrieved chunks
-        knowledge_context = self._format_knowledge_context(retrieved_chunks)
+        try:
+            retrieved_chunks = await self._retrieve_knowledge(
+                query=query, bot_config=bot_config, tenant_context=tenant_context
+            )
+            knowledge_context = self._format_knowledge_context(retrieved_chunks)
+        except KnowledgeUnavailable:
+            # 🚨 Said to the model, not hidden from it: "no relevant knowledge"
+            # after a failed search let it supply a price of its own.
+            retrieved_chunks = []
+            knowledge_context = KNOWLEDGE_UNAVAILABLE
 
         # 5. Build message list
         messages = await self._build_messages(
@@ -482,7 +504,7 @@ Response Guidelines:
 
         except Exception as e:
             logger.error("RAG retrieval failed", error=str(e))
-            return []
+            raise KnowledgeUnavailable(str(e)[:200]) from e
 
     def _format_knowledge_context(self, chunks: list[Any]) -> str:
         """
@@ -493,7 +515,7 @@ Response Guidelines:
         - P5: Sort by score desc; cap each chunk at 600 chars; total budget 2500 chars
         """
         if not chunks:
-            return "No relevant knowledge found."
+            return NO_RELEVANT_KNOWLEDGE
 
         # P5: Sort by score descending so best chunks get injected first
         sorted_chunks = sorted(chunks, key=lambda c: getattr(c, "score", 0), reverse=True)
