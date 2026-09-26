@@ -158,6 +158,45 @@ class AssembledContext:
     context_tokens: int = 0
 
 
+#: How an answer is written, per channel. Keyed by the `channel` a caller
+#: puts in the query's context envelope; anything unknown is "chat".
+_FORMAT_GUIDELINES: dict[str, str] = {
+    "voice": """1. This answer is SPOKEN ALOUD on a phone call. Plain prose only.
+2. **Never emit HTML or markdown.** No tags, no lists, no bullets, no code blocks, no URLs.
+3. Lead with the answer itself. No preamble — never open with "I found some information about".
+4. Keep it to at most two short sentences unless the caller asked for detail.
+5. Write numbers, dates and times the way a person says them.
+6. Only use information from the provided knowledge base.
+7. If you don't know, say so in one sentence and offer to connect a human.""",
+    "text": """1. This answer is sent as a message in a chat app such as WhatsApp. Plain text only.
+2. **Never emit HTML or markdown.** No tags, no headings, no code blocks.
+3. Lead with the answer itself. No preamble — never open with "I found some information about".
+4. Keep it short: one to three sentences. For several items, put each on its own line.
+5. Only use information from the provided knowledge base.
+6. If you don't know, say so in one sentence and say the team will follow up.""",
+    "chat": """1. **Format your entire response as valid HTML.** Do not use markdown (no **bold**, no *italics*, no `code`).
+2. **CRITICAL:** Do NOT wrap your response in markdown code blocks (like ```html ... ```). Return raw HTML only.
+3. Use `<ul>` and `<li>` for lists of messages or items.
+4. Use `<strong>` for bold text (e.g., author names or key terms).
+5. Use `<p>` for paragraphs.
+6. Do not include `<html>`, `<head>`, or `<body>` tags. Just return the content HTML.
+7. Group information by author or source if many items are present.
+8. Be conversational and helpful. Start with a direct answer.
+9. Only use information from the provided knowledge base.
+10. If you don't know something, say so clearly (wrapped in `<p>`).
+11. Cite sources or authors precisely.""",
+}
+
+#: 🚨 IN THE USER'S LANGUAGE, ON EVERY CHANNEL. These guidelines come after the
+#: bot's own instructions and, in English with an English example answer, they
+#: outweighed a persona's "reply in Egyptian Arabic": an Arabic question about a
+#: price was answered in English. The knowledge base may be in another language
+#: than the question — the answer follows the question.
+_LANGUAGE_RULE = """
+**Language:** Reply in the language of the user's latest message, even when the knowledge base is written in
+another language. If the instructions above say how to write that language (a dialect, a tone), follow them."""
+
+
 class ContextAssembler:
     """
     Assembles context for LLM queries.
@@ -275,27 +314,11 @@ class ContextAssembler:
         # HTML rules below were overriding the caller's own "two short sentences,
         # no markup, no preamble" instruction. The bot then read the template's
         # own example aloud: "I found some information about…", wrapped in <p>.
-        if channel == "voice":
-            format_guidelines = """1. This answer is SPOKEN ALOUD on a phone call. Plain prose only.
-2. **Never emit HTML or markdown.** No tags, no lists, no bullets, no code blocks, no URLs.
-3. Lead with the answer itself. No preamble — never open with "I found some information about".
-4. Keep it to at most two short sentences unless the caller asked for detail.
-5. Write numbers, dates and times the way a person says them.
-6. Only use information from the provided knowledge base.
-7. If you don't know, say so in one sentence and offer to connect a human."""
-        else:
-            format_guidelines = """1. **Format your entire response as valid HTML.** Do not use markdown (no **bold**, no *italics*, no `code`).
-2. **CRITICAL:** Do NOT wrap your response in markdown code blocks (like ```html ... ```). Return raw HTML only.
-3. Use `<ul>` and `<li>` for lists of messages or items.
-4. Use `<strong>` for bold text (e.g., author names or key terms).
-5. Use `<p>` for paragraphs.
-6. Do not include `<html>`, `<head>`, or `<body>` tags. Just return the content HTML.
-7. Group information by author or source if many items are present.
-8. Be conversational and helpful. Start with a direct answer like "<p>Yes, I found some messages from...</p>".
-9. Only use information from the provided knowledge base.
-10. If you don't know something, say so clearly (wrapped in `<p>`).
-11. Cite sources or authors precisely."""
-
+        #
+        # 🚨 A MESSAGING APP IS NEITHER. WhatsApp shows `<p>` as the three
+        # characters it is; only the web widget renders HTML. So "text" is plain
+        # prose too — written to be read, not heard.
+        format_guidelines = _FORMAT_GUIDELINES.get(channel, _FORMAT_GUIDELINES["chat"])
         tenant_prompt = f"""
 You are operating for tenant: {tenant_context.tenant_id}
 User role: {tenant_context.role}
@@ -303,6 +326,7 @@ Current Date & Time: {current_time_str}
 
 Response Guidelines:
 {format_guidelines}
+{_LANGUAGE_RULE}
 
 **Logic & Reasoning:**
 - **Time Check:** Compare any dates mentioned in the knowledge base (e.g., "14th Feb") with the **Current Date & Time ({current_time_str})**.
