@@ -36,7 +36,7 @@ supabase>=2.0.0
 redis>=5.0.0
 
 # Database
-sqlalchemy>=2.0.0
+sqlalchemy>=2.0.0,<2.1  # 2.1 made psycopg 3 the default for postgresql:// — vecs/pgvector use psycopg2; an unbounded pin crash-looped a fresh build
 asyncpg>=0.29.0
 motor>=3.3.0
 
