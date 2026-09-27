@@ -47,3 +47,27 @@ def test_no_english_example_answer_to_copy():
     """An English example ("Yes, I found some messages from…") pulled Arabic answers into English."""
     for channel in ("chat", "text", "voice"):
         assert "I found some messages" not in _prompt(channel)
+
+
+def _messages(channel: str) -> str:
+    from src.protocol.models import SessionContext
+
+    assembler = ContextAssembler(rag_client=None, bot_registry=None, session_store=None, prompt_engine=None)
+    tenant = TenantContext(tenant_id="Tenant-x", user_id="u1", user_email="u@example.com")
+    session = SessionContext(tenant_context=tenant, bot_id="b1")
+    msgs = asyncio.run(assembler._build_messages(_prompt(channel), "<knowledge_base/>", "q", session))
+    return msgs[0]["content"]
+
+
+@pytest.mark.parametrize("channel", ["chat", "text", "voice"])
+def test_a_gap_is_never_blamed_on_the_provided_text(channel):
+    """ "Opening hours are not available in the provided text" reached a clinic patient."""
+    prompt = _messages(channel)
+    assert "say so" not in prompt
+    assert "never mention" in prompt
+    assert "the provided text" in prompt  # named only as something never to say
+
+
+def test_every_question_in_the_message_is_answered():
+    """ "How much is Botox and fillers, where are you, are you open Friday?" is four questions."""
+    assert "Answer EVERY question" in _messages("text")
