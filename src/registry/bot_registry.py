@@ -10,6 +10,11 @@ logger = structlog.get_logger(__name__)
 #: core-api's ``app.services.workspace_assets.WORKSPACE_SCOPE``.
 WORKSPACE_SCOPE = "workspace"
 
+#: core-api's ``agent_links.COLLECTION``: one row per agent assigned to a
+#: workspace, ``{_id: bot_id, owner_tenant_id, tenant_id, ...}``. An assigned
+#: agent is LINKED, never copied, so its config and knowledge stay with its owner.
+AGENT_LINKS = "agent_workspace_links"
+
 from config.settings import get_settings
 
 
@@ -81,6 +86,23 @@ class BotRegistry:
             return ws
         return await coll.find_one({"tenant_id": tenant_id})
 
+    async def config_tenant(self, tenant_id: str, bot_id: str) -> str:
+        """The tenant whose workspace holds ``bot_id``'s config and knowledge, for a turn serving ``tenant_id``.
+
+        The agent's OWNER when core-api has linked the agent to ``tenant_id``;
+        otherwise ``tenant_id`` itself. 🚨 The filter pins the bot AND the
+        serving tenant, so an agent linked to another workspace grants this one
+        nothing — it then finds no bot of that id and answers with none of its
+        config. Read every turn (one primary-key lookup) and never cached, so a
+        reassign takes effect on the next turn.
+        """
+        if not self.mongodb_client or not tenant_id or not bot_id:
+            return tenant_id
+        coll = self.mongodb_client[self.settings.mongodb_db_name][AGENT_LINKS]
+        row = await coll.find_one({"_id": bot_id, "tenant_id": tenant_id}, {"owner_tenant_id": 1})
+        owner = str((row or {}).get("owner_tenant_id") or "")
+        return owner or tenant_id
+
     def invalidate(self, tenant_id: str, bot_id: str) -> None:
         """Drop the cached config for a (tenant, bot). Call from provisioning
         paths (bot edited, KBs (re)assigned) so the next get_bot() re-reads
@@ -90,9 +112,25 @@ class BotRegistry:
     async def get_bot(self, bot_id: str, tenant_id: str) -> dict[str, Any]:
         """
         Get bot configuration by ID and tenant from CustomerProfile.customerService.
+
+        ``tenant_id`` is the workspace the turn serves. An agent linked to it
+        (core-api ``agent_links``) is read from its OWNER's workspace, and the
+        returned config carries ``config_tenant_id`` — the tenant whose
+        knowledge collections hold its KBs. Everything else on the turn
+        (metering, keys, connectors) stays with ``tenant_id``.
         """
+        try:
+            config_tenant = await self.config_tenant(tenant_id, bot_id)
+        except Exception as e:
+            # Fail closed onto the serving tenant: an unreadable link reads only
+            # what that workspace itself owns, never another workspace's agent.
+            logger.error("Agent link lookup failed", error=str(e))
+            config_tenant = tenant_id
+        tenant_id = config_tenant
         # FIX #7: serve from the short TTL cache when fresh. This also dedupes
         # the second identical fetch on the rag_query tool path within a turn.
+        # Keyed on the CONFIG tenant: the link above is re-read every call, so a
+        # cached owner config is only ever served to the workspace linked now.
         cache_key = (tenant_id, bot_id)
         if self._cache_ttl > 0:
             entry = self._cache.get(cache_key)
@@ -144,6 +182,7 @@ class BotRegistry:
 
             bot["kb_ids"] = kb_ids
             bot["kbs"] = kb_ids  # keep kbs aligned with the resolved set for retrieval
+            bot["config_tenant_id"] = tenant_id  # whose knowledge collections hold kb_ids
 
             logger.info(
                 "Fetched bot config",
