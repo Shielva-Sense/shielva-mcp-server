@@ -118,14 +118,19 @@ class ToolRegistry:
                 # Create a closure to inject bot-specific defaults
                 async def wrapped_rag_handler(tenant_context, query, kb_ids=None, top_k=5):
                     # If LLM didn't provide KB IDs, try to fetch from bot config
+                    knowledge_tenant = None
                     if not kb_ids and self.bot_registry:
                         bot_config = await self.bot_registry.get_bot(bot_id, tenant_context.tenant_id)
                         if bot_config:
                             kb_ids = bot_config.get("kb_ids", [])
+                            # A linked agent's KBs live in its owner's collections.
+                            knowledge_tenant = bot_config.get("config_tenant_id")
 
                     # Call the actual rag_query_tool logic (which might be self.rag_query_tool)
                     # We pass 'self' because it might be a method or we can call it directly
-                    return await self.rag_query_tool(tenant_context, query, kb_ids=kb_ids, top_k=top_k)
+                    return await self.rag_query_tool(
+                        tenant_context, query, kb_ids=kb_ids, top_k=top_k, knowledge_tenant=knowledge_tenant
+                    )
 
                 handler = wrapped_rag_handler
 
@@ -282,9 +287,13 @@ class ToolRegistry:
         query: str,
         kb_ids: list[str] = None,
         top_k: int = 5,
+        knowledge_tenant: str | None = None,
     ) -> dict[str, Any]:
         """
         Query knowledge bases for relevant information.
+
+        ``knowledge_tenant`` is set only from the bot registry (a linked agent's
+        owner); the model can never name it — it is not in the tool's schema.
         """
         if not self.rag_client:
             logger.warning("RAG client not initialized in ToolRegistry")
@@ -294,7 +303,7 @@ class ToolRegistry:
             # Call RAG engine
             results = await self.rag_client.retrieve(
                 query=query,
-                tenant_id=tenant_context.tenant_id,
+                tenant_id=knowledge_tenant or tenant_context.tenant_id,
                 kb_ids=kb_ids or [],
                 top_k=top_k,
                 rerank=True,

@@ -396,23 +396,28 @@ Response Guidelines:
             logger.warning("No knowledge bases configured for bot")
             return []
 
+        # The tenant whose collections hold this bot's KBs: the request tenant,
+        # or — for an agent linked to it — the agent's owner (set by the
+        # registry from core-api's link, never from the request).
+        knowledge_tenant = str(bot_config.get("config_tenant_id") or tenant_context.tenant_id)
+
         # ── Cross-tenant KB guard (CC6.7) ─────────────────────────────
         kb_configs = bot_config.get("kbs", [])
         for kb in kb_configs:
             if not isinstance(kb, dict):
                 continue
             kb_tenant = kb.get("tenant_id")
-            if kb_tenant and kb_tenant != tenant_context.tenant_id:
+            if kb_tenant and kb_tenant != knowledge_tenant:
                 logger.error(
                     "kb_tenant_mismatch_refused",
-                    request_tenant=tenant_context.tenant_id,
+                    request_tenant=knowledge_tenant,
                     kb_id=kb.get("id"),
                     kb_tenant=kb_tenant,
                 )
                 # Hard-fail closed — never reach RAG.
                 raise AssertionError(
                     f"KB {kb.get('id')!r} belongs to tenant {kb_tenant!r}, "
-                    f"not the request tenant {tenant_context.tenant_id!r} — "
+                    f"not the request tenant {knowledge_tenant!r} — "
                     "refusing to retrieve (CC6.7 multi-tenant isolation)."
                 )
 
@@ -454,7 +459,7 @@ Response Guidelines:
             return []
 
         # P1: Check cache
-        cache_key = self._cache_key(query, tenant_context.tenant_id, effective_kb_ids, top_k)
+        cache_key = self._cache_key(query, knowledge_tenant, effective_kb_ids, top_k)
         if self.query_cache:
             try:
                 cached = await self.query_cache.get(cache_key)
@@ -467,7 +472,7 @@ Response Guidelines:
         try:
             results = await self.rag_client.retrieve(
                 query=query,
-                tenant_id=tenant_context.tenant_id,
+                tenant_id=knowledge_tenant,
                 kb_ids=effective_kb_ids,
                 top_k=top_k,
                 rerank=True,
