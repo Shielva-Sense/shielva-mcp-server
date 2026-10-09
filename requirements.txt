@@ -7,8 +7,11 @@
 # `vault:v1:` — it silently ignores `vault:kv:` references. Both gaps have
 # already broken a service on its next rebuild (acp-core, auth-manager), and
 # in each case the running pod kept serving because it PREDATED the gap, so
-# nothing surfaced it until a restart. Same ref shielva-identity pins.
-shielva-common @ git+https://github.com/Shielva-AI/shielva-platform-core@65748b8e1e9e8d7f3285c427773de764e150cdaa#subdirectory=shielva-common
+# nothing surfaced it until a restart.
+# 2026-10-10: 31e4755 = platform-core master after PR #12 (shielva-common 1.4.1, a
+# descendant of 65748b8): python-jose (CVE-2026-85394, no fixed release) replaced
+# by PyJWT, so python-jose and ecdsa leave the tree.
+shielva-common @ git+https://github.com/Shielva-AI/shielva-platform-core@31e47557c0d84c46645b8e95fe87beaf1a6a9c47#subdirectory=shielva-common
 
 # Core
 fastapi>=0.109.0
