@@ -342,3 +342,11 @@ def test_create_demo_needs_a_bot():
 def test_create_demo_is_registered():
     names = {d.name for d, _ in life.LIFECYCLE_TOOL_DEFINITIONS}
     assert "shielva_create_demo" in names
+
+
+def test_create_knowledge_base_sends_the_source_type_core_api_requires(monkeypatch):
+    """core-api 422s a create without `source_type`, so the tool always sends one."""
+    rec = _Recorder({"kb_id": "kb1"})
+    monkeypatch.setattr(life, "_call", rec)
+    asyncio.run(life.shielva_create_knowledge_base(_t(), "Research"))
+    assert rec.calls[0]["json"]["source_type"] == "website"

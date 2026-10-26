@@ -111,14 +111,26 @@ async def shielva_deploy_bot(tenant_context: TenantContext, bot_id: str) -> dict
 
 
 async def shielva_create_knowledge_base(
-    tenant_context: TenantContext, name: str, description: str = ""
+    tenant_context: TenantContext, name: str, description: str = "", source_type: str = "website"
 ) -> dict[str, Any]:
-    """Create a knowledge base an `answer` node can ground its replies in."""
+    """Create a knowledge base an `answer` node can ground its replies in.
+
+    core-api requires `source_type` (where the content comes from); without it
+    every create is a 422. Web pages are what `shielva_ingest_url` fills a KB
+    with, so "website" is the default.
+    """
     if not (name or "").strip():
         return _fail("name is required")
     try:
         data = await _call(
-            "POST", "/knowledge/create", tenant_context, json={"name": name.strip(), "description": description or ""}
+            "POST",
+            "/knowledge/create",
+            tenant_context,
+            json={
+                "name": name.strip(),
+                "description": description or "",
+                "source_type": (source_type or "website").strip(),
+            },
         )
     except ToolCallError as exc:
         return _fail(str(exc))
@@ -276,6 +288,12 @@ LIFECYCLE_TOOL_DEFINITIONS: list[tuple[ToolDefinition, Any]] = [
         [
             {"name": "name", "type": "string", "description": "Knowledge base name", "required": True},
             {"name": "description", "type": "string", "description": "What it holds", "required": False},
+            {
+                "name": "source_type",
+                "type": "string",
+                "description": "Where its content comes from (default website)",
+                "required": False,
+            },
         ],
         shielva_create_knowledge_base,
     ),
