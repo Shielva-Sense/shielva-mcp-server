@@ -150,8 +150,15 @@ class LLMStreamChunk:
     ``delta`` is the incremental assistant text for this chunk (may be empty on
     the terminal chunk). ``finish_reason`` is set only on the final chunk.
     ``model`` identifies the provider model that served the stream.
+
+    ``tool_calls`` is set only on the final chunk of a request that offered
+    tools and whose model chose to call them: the calls assembled from their
+    streamed fragments, whole, exactly as the non-streaming path returns them.
+    A caller speaking the text as it arrives (a phone call) hears the model's
+    first words while it is still deciding, and runs the tools at the end.
     """
 
     delta: str = ""
     finish_reason: FinishReason | None = None
     model: ModelId = ModelId("")
+    tool_calls: tuple[LLMToolCall, ...] = ()
