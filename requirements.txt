@@ -29,7 +29,7 @@ langchain-core>=0.1.0
 langgraph>=0.0.20
 
 # LLM Router
-litellm>=1.17.0
+litellm==1.104.2  # 1.108 imports the absent mcp package on every call with tools
 google-generativeai>=0.3.0
 
 # LlamaIndex for RAG
