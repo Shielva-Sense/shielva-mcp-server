@@ -253,8 +253,14 @@ async def llm_complete_stream(
       * ``data: [DONE]``                                       terminal sentinel
       * ``event: error\\ndata: {"error": "...", ...}``         on failure
 
-    Tools are NOT supported on the streaming path (text-only). Use the
-    non-streaming ``/llm/complete`` for tool-calling loops.
+    With ``tools`` the model may call them, as on ``/llm/complete``: the final
+    frame then carries ``"tool_calls": [...]`` (whole calls, the same shape
+    ``/llm/complete`` returns) with ``finish_reason: "tool_calls"``. Any text the
+    model said before deciding streams first. The caller drives the tool loop.
+
+    🚨 Why a phone call needs this: on ``/llm/complete`` the caller hears
+    nothing until the whole reply is written. Streamed, the first sentence can
+    be spoken while the rest is still being generated.
     """
     service = _service(request)
 
@@ -284,8 +290,8 @@ async def llm_complete_stream(
         model=ModelId(body.model) if body.model else None,
         max_tokens=body.max_tokens,
         temperature=body.temperature,
-        tools=None,
-        tool_choice=None,
+        tools=tuple(body.tools) if body.tools else None,
+        tool_choice=body.tool_choice if body.tools else None,
         stream=True,
     )
 
@@ -298,6 +304,11 @@ async def llm_complete_stream(
                 }
                 if chunk.finish_reason is not None:
                     payload["finish_reason"] = chunk.finish_reason.value
+                if chunk.tool_calls:
+                    payload["tool_calls"] = [
+                        {"id": tc.id, "type": "function", "function": {"name": tc.name, "arguments": tc.arguments}}
+                        for tc in chunk.tool_calls
+                    ]
                 yield f"data: {json.dumps(payload)}\n\n"
             yield "data: [DONE]\n\n"
         except Exception as exc:

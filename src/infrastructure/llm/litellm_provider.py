@@ -156,9 +156,12 @@ class LiteLLMProviderAdapter(LLMProvider):
 
         Provider fallback covers only the INITIAL connection: once the stream
         begins emitting tokens we never switch providers (that would duplicate
-        or garble already-sent output). A mid-stream error propagates. Streaming
-        is text-only here — tools are not surfaced (the streaming consumers are
-        plain-text explanations / analyses).
+        or garble already-sent output). A mid-stream error propagates.
+
+        With ``request.tools`` the model may call them: their fragments are
+        assembled here and surfaced WHOLE on the final chunk (`tool_calls`),
+        never as partial JSON. The caller drives the tool loop exactly as on
+        ``complete``; what streams early is the text the model says first.
         """
         # 🚨 The allowance gate belongs HERE, on the path that actually runs.
         #
@@ -193,6 +196,9 @@ class LiteLLMProviderAdapter(LLMProvider):
             # therefore metered as zero — every streamed phone answer was free.
             "stream_options": {"include_usage": True},
         }
+        if request.tools:
+            kwargs["tools"] = list(request.tools)
+            kwargs["tool_choice"] = request.tool_choice or "auto"
 
         # (model, api_key, api_base) attempts: per-tenant target first, then the
         # platform fallback chain. Connect — fallback applies to connect-time only.
@@ -225,6 +231,10 @@ class LiteLLMProviderAdapter(LLMProvider):
         prompt_tokens = 0
         completion_tokens = 0
         cached_tokens = 0
+        # Tool calls arrive as fragments keyed by `index`: the id and name once,
+        # the arguments a few characters at a time. Held until the stream ends.
+        calls: dict[int, dict[str, str]] = {}
+        finish: FinishReason | None = None
 
         async for part in resp_stream:
             usage = getattr(part, "usage", None)
@@ -239,19 +249,29 @@ class LiteLLMProviderAdapter(LLMProvider):
             choice = choices[0]
             delta_obj = getattr(choice, "delta", None)
             text = (getattr(delta_obj, "content", None) or "") if delta_obj else ""
+            _gather_tool_calls(calls, getattr(delta_obj, "tool_calls", None) if delta_obj else None)
             finish_raw = getattr(choice, "finish_reason", None)
-            finish: FinishReason | None = None
             if finish_raw:
                 try:
                     finish = FinishReason(str(finish_raw).lower())
                 except ValueError:
                     finish = FinishReason.OTHER
-            if text or finish is not None:
-                yield LLMStreamChunk(
-                    delta=text,
-                    finish_reason=finish,
-                    model=ModelId(used_model),
-                )
+            if text:
+                yield LLMStreamChunk(delta=text, model=ModelId(used_model))
+
+        # 🚨 ONE terminal chunk, after the provider's stream is exhausted: some
+        # providers send `finish_reason` before the last tool-call fragment (and
+        # usage after both), so a chunk yielded at `finish_reason` could carry
+        # half the arguments of a call.
+        assembled = _assembled_tool_calls(calls)
+        if assembled and finish in (None, FinishReason.STOP, FinishReason.OTHER):
+            finish = FinishReason.TOOL_CALLS
+        yield LLMStreamChunk(
+            delta="",
+            finish_reason=finish or FinishReason.STOP,
+            model=ModelId(used_model),
+            tool_calls=assembled,
+        )
 
         # Reported once the stream is exhausted, for the same reason the
         # non-streaming path reports after the completion: the customer's
@@ -269,6 +289,31 @@ class LiteLLMProviderAdapter(LLMProvider):
 
 
 # ── helpers ───────────────────────────────────────────────────────
+
+
+def _gather_tool_calls(calls: dict[int, dict[str, str]], fragments: Any) -> None:
+    """Fold one chunk's tool-call fragments into `calls` (by their `index`)."""
+    for pos, frag in enumerate(fragments or ()):
+        index = getattr(frag, "index", None)
+        key = int(index) if isinstance(index, int) else pos
+        slot = calls.setdefault(key, {"id": "", "name": "", "arguments": ""})
+        if getattr(frag, "id", None):
+            slot["id"] = str(frag.id)
+        fn = getattr(frag, "function", None)
+        if fn is not None:
+            if getattr(fn, "name", None):
+                slot["name"] = str(fn.name)
+            if getattr(fn, "arguments", None):
+                slot["arguments"] += str(fn.arguments)
+
+
+def _assembled_tool_calls(calls: dict[int, dict[str, str]]) -> tuple[LLMToolCall, ...]:
+    """The whole calls, in the order the model made them; a fragment that never named its tool is dropped."""
+    return tuple(
+        LLMToolCall(id=c["id"] or f"call_{i}", name=c["name"], arguments=c["arguments"] or "{}")
+        for i, c in sorted(calls.items())
+        if c["name"]
+    )
 
 
 def _request_ref(tenant: TenantContext) -> str:
