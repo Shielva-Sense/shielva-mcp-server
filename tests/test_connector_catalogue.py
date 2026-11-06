@@ -76,7 +76,20 @@ class _Cat(ConnectorToolCatalogue):
 
 def test_the_name_drops_the_suffix_every_connector_carries():
     assert tool_name_for("google_gmail_connector", "send_email") == "google_gmail__send_email"
-    assert _split("google_gmail__send_email") == ("google_gmail_connector", "send_email")
+    assert _split("google_gmail__send_email") == ("google_gmail", "send_email")
+
+
+@pytest.mark.asyncio
+async def test_a_connector_without_the_suffix_can_be_found_and_called():
+    sales = {
+        "type": "shielva_sales",
+        "display_name": "Shielva Sales",
+        "capability_actions": [{"capability": "crm.list_leads", "action": "list_leads"}],
+    }
+    cat = _Cat({"shielva_sales"}, {"shielva_sales": sales, "hubspot_connector": HUBSPOT})
+    name = ToolName("shielva_sales__list_leads")
+    assert await cat.get(name) is not None
+    assert await cat.get(ToolName("hubspot__create_contact")) is not None
 
 
 def test_a_name_that_is_not_a_connector_tool_is_rejected_not_guessed():
