@@ -35,6 +35,7 @@ restart.
 from __future__ import annotations
 
 import time
+from collections.abc import Collection
 from typing import Any
 
 import httpx
@@ -103,11 +104,22 @@ def tool_name_for(connector_type: str, api_id: str) -> ToolName:
 
 
 def _split(name: str) -> tuple[str, str]:
-    """A tool name back to (connector_type, method). ("", "") when it is not one."""
+    """A tool name back to (name without suffix, method). ("", "") when it is not one."""
     base, sep, api_id = name.partition(SEP)
     if not sep or not base or not api_id:
         return "", ""
-    return f"{base}_connector", api_id
+    return base, api_id
+
+
+def _connector_type(base: str, known: Collection[str]) -> str:
+    """The real type behind a tool name: only some types end in `_connector`.
+
+    `tool_name_for` drops the suffix when there is one, so `shielva_sales` and
+    `google_gmail_connector` both arrive here bare. Assuming the suffix made
+    every unsuffixed connector answer "Tool not found".
+    """
+    suffixed = f"{base}_connector"
+    return suffixed if suffixed in known else base
 
 
 def _schema_for(api: dict[str, Any]) -> ToolSchema:
@@ -263,10 +275,11 @@ class ConnectorToolCatalogue(ToolCatalogue, ToolExecutor):
     async def get(self, name: ToolName) -> Tool | None:
         """Pure lookup, no tenant — the port says permission is the executor's
         job, and `execute` does exactly that."""
-        ctype, api_id = _split(str(name))
-        if not ctype:
+        base, api_id = _split(str(name))
+        if not base:
             return None
-        declared = (await self._types()).get(ctype)
+        types = await self._types()
+        declared = types.get(_connector_type(base, types))
         if not declared:
             return None
         for api in declared.get(ACTIONS_KEY) or []:
@@ -288,9 +301,10 @@ class ConnectorToolCatalogue(ToolCatalogue, ToolExecutor):
         tenant: TenantContext,
         context: dict[str, Any] | None = None,
     ) -> ToolResult:
-        ctype, method = _split(str(tool.name))
-        if not ctype:
+        base, method = _split(str(tool.name))
+        if not base:
             return ToolResult.text(f"{tool.name} is not a connector tool.", is_error=True)
+        ctype = _connector_type(base, await self._types())
 
         # 🚨 THE authorisation check. `list_for` filtered the listing, and a
         # listing is not a boundary — nothing obliges a caller to have read it,
